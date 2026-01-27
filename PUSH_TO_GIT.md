@@ -1,6 +1,22 @@
-# Instructions to Push to GitHub
+# Git Repository Status
 
-Due to permission restrictions on the external drive, please run these commands manually in your terminal:
+✅ **Commit created successfully!** (64 files, 14,758 insertions)
+
+The code has been committed locally. To push to GitHub, run:
+
+```bash
+cd /Volumes/HashSSD/mywork/restaurent
+git push -u origin main
+```
+
+**Note:** If you get network errors, make sure you have:
+- Internet connectivity
+- GitHub authentication configured (personal access token or SSH key)
+- Write access to the repository
+
+---
+
+## Original Instructions (if needed)
 
 ## Step 1: Initialize Git (if needed)
 ```bash
@@ -10,7 +26,12 @@ git init
 
 ## Step 2: Add Remote Repository
 ```bash
-git remote add origin https://github.com/hashdev89/restaurenthub.git
+git remote add origin https://github.com/hashdev89/restaurent.git
+```
+
+Or if remote already exists, update it:
+```bash
+git remote set-url origin https://github.com/hashdev89/restaurent.git
 ```
 
 ## Step 3: Stage All Files
