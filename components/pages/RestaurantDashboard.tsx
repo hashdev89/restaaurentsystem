@@ -1,65 +1,16 @@
 'use client'
 
-import { useState } from 'react'
+import { useState, useEffect, useCallback } from 'react'
 import Link from 'next/link'
-import { LayoutDashboard, History, LogOut, Utensils, Plus, Edit, Trash2 } from 'lucide-react'
+import { LayoutDashboard, History, LogOut, Utensils, Plus, Edit, Trash2, Shield, Hash, Package, Printer } from 'lucide-react'
 import { Order, MenuItem } from '@/types'
 import { OrderCard } from '../OrderCard'
 import { Button } from '../ui/Button'
 import { Card } from '../ui/Card'
 import { Modal } from '../ui/Modal'
 import { MenuItemForm } from '../MenuItemForm'
-
-// Mock Orders Data
-const MOCK_ORDERS: Order[] = [
-  {
-    id: 'ord_12345',
-    restaurantId: 'rest_1',
-    customerName: 'Alice Johnson',
-    customerEmail: 'alice@example.com',
-    customerPhone: '(02) 9123 4567',
-    items: [
-      { menuItemId: '1', name: 'Aussie Beef Pie', quantity: 2, price: 12.99 },
-      { menuItemId: '4', name: 'Pavlova', quantity: 1, price: 9.5 }
-    ],
-    total: 35.48,
-    status: 'pending',
-    orderType: 'dine-in',
-    tableNumber: '5',
-    createdAt: new Date().toISOString(),
-    paymentStatus: 'authorized'
-  },
-  {
-    id: 'ord_67890',
-    restaurantId: 'rest_1',
-    customerName: 'Bob Smith',
-    customerEmail: 'bob@example.com',
-    customerPhone: '(02) 9876 5432',
-    items: [{ menuItemId: '2', name: 'Fish & Chips', quantity: 1, price: 18.5 }],
-    total: 20.35,
-    status: 'pending',
-    orderType: 'pickup',
-    createdAt: new Date(Date.now() - 1000 * 60 * 5).toISOString(),
-    paymentStatus: 'authorized'
-  },
-  {
-    id: 'ord_54321',
-    restaurantId: 'rest_1',
-    customerName: 'Charlie Brown',
-    customerEmail: 'charlie@example.com',
-    customerPhone: '(02) 9456 7890',
-    items: [
-      { menuItemId: '3', name: 'Aussie Burger', quantity: 1, price: 16.99 },
-      { menuItemId: '4', name: 'Pavlova', quantity: 1, price: 9.5 }
-    ],
-    total: 29.14,
-    status: 'accepted',
-    orderType: 'dine-in',
-    tableNumber: '12',
-    createdAt: new Date(Date.now() - 1000 * 60 * 30).toISOString(),
-    paymentStatus: 'captured'
-  }
-]
+import { normalizeOrders, type SupabaseOrderRow } from '@/lib/orders'
+import { useNotification } from '../providers/NotificationProvider'
 
 // Mock Menu Data for this restaurant
 const MOCK_MENU_ITEMS: MenuItem[] = [
@@ -96,32 +47,228 @@ const MOCK_MENU_ITEMS: MenuItem[] = [
 ]
 
 const CURRENT_RESTAURANT_ID = 'rest_1'
+const ORDERS_POLL_MS = 8000
 
 export function RestaurantDashboard() {
-  const [orders, setOrders] = useState<Order[]>(MOCK_ORDERS)
+  const { success, error, info } = useNotification()
+  const [orders, setOrders] = useState<Order[]>([])
   const [menuItems, setMenuItems] = useState<MenuItem[]>(MOCK_MENU_ITEMS)
-  const [activeTab, setActiveTab] = useState<'pending' | 'history' | 'menu'>('pending')
+  const [activeTab, setActiveTab] = useState<'pending' | 'ready' | 'history' | 'menu' | 'tables' | 'stock'>('pending')
   const [isModalOpen, setIsModalOpen] = useState(false)
   const [editingItem, setEditingItem] = useState<Partial<MenuItem> | null>(null)
+  const [ordersLoading, setOrdersLoading] = useState(true)
+  const [tables, setTables] = useState<{ id: string; table_number: string; capacity: number; status: string; location?: string }[]>([])
+  const [inventory, setInventory] = useState<{ id: string; barcode: string; name: string; quantity: number; price: number }[]>([])
+  const [tablesLoading, setTablesLoading] = useState(false)
+  const [inventoryLoading, setInventoryLoading] = useState(false)
+  const [newTableNumber, setNewTableNumber] = useState('')
+  const [newTableCapacity, setNewTableCapacity] = useState(4)
+  const [newStockBarcode, setNewStockBarcode] = useState('')
+  const [newStockName, setNewStockName] = useState('')
+  const [newStockQty, setNewStockQty] = useState(0)
+  const [newStockPrice, setNewStockPrice] = useState(0)
+
+  const fetchOrders = useCallback(async () => {
+    try {
+      const res = await fetch(`/api/orders?restaurantId=${CURRENT_RESTAURANT_ID}`)
+      if (!res.ok) return
+      const data = await res.json()
+      const list = (data.orders || []) as SupabaseOrderRow[]
+      setOrders(normalizeOrders(list))
+    } catch (e) {
+      console.error('Fetch orders error:', e)
+    } finally {
+      setOrdersLoading(false)
+    }
+  }, [])
+
+  useEffect(() => {
+    fetchOrders()
+    const interval = setInterval(fetchOrders, ORDERS_POLL_MS)
+    return () => clearInterval(interval)
+  }, [fetchOrders])
+
+  const updateOrderStatus = useCallback(
+    async (orderId: string, status: Order['status']) => {
+      try {
+        const res = await fetch(`/api/orders/${orderId}`, {
+          method: 'PATCH',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ status })
+        })
+        if (!res.ok) throw new Error('Update failed')
+        setOrders((prev) =>
+          prev.map((o) => (o.id === orderId ? { ...o, status } : o))
+        )
+        if (status === 'accepted') {
+          success('Order accepted', 'Order sent to kitchen.')
+        } else if (status === 'rejected') {
+          info('Order rejected', 'Order has been rejected.')
+        } else if (status === 'completed') {
+          success('Order completed', 'Billing done.')
+        }
+      } catch (e) {
+        error('Update failed', e instanceof Error ? e.message : 'Could not update order')
+      }
+    },
+    [success, error, info]
+  )
 
   const handleAcceptOrder = (orderId: string) => {
-    setOrders((prev) =>
-      prev.map((order) =>
-        order.id === orderId
-          ? { ...order, status: 'accepted', paymentStatus: 'captured' }
-          : order
-      )
-    )
+    updateOrderStatus(orderId, 'accepted')
   }
 
   const handleRejectOrder = (orderId: string) => {
-    setOrders((prev) =>
-      prev.map((order) =>
-        order.id === orderId
-          ? { ...order, status: 'rejected', paymentStatus: 'cancelled' }
-          : order
-      )
-    )
+    updateOrderStatus(orderId, 'rejected')
+  }
+
+  const handleProceedToBilling = (orderId: string) => {
+    updateOrderStatus(orderId, 'completed')
+  }
+
+  const fetchTables = useCallback(async () => {
+    setTablesLoading(true)
+    try {
+      const res = await fetch(`/api/tables?restaurantId=${CURRENT_RESTAURANT_ID}`)
+      if (!res.ok) return
+      const data = await res.json()
+      setTables(data.tables ?? [])
+    } catch (e) {
+      console.error('Fetch tables error:', e)
+    } finally {
+      setTablesLoading(false)
+    }
+  }, [])
+
+  const fetchInventory = useCallback(async () => {
+    setInventoryLoading(true)
+    try {
+      const res = await fetch(`/api/inventory?restaurantId=${CURRENT_RESTAURANT_ID}`)
+      if (!res.ok) return
+      const data = await res.json()
+      setInventory(data.items ?? [])
+    } catch (e) {
+      console.error('Fetch inventory error:', e)
+    } finally {
+      setInventoryLoading(false)
+    }
+  }, [])
+
+  useEffect(() => {
+    if (activeTab === 'tables') fetchTables()
+  }, [activeTab, fetchTables])
+
+  useEffect(() => {
+    if (activeTab === 'stock') fetchInventory()
+  }, [activeTab, fetchInventory])
+
+  const handleAddTable = async (e: React.FormEvent) => {
+    e.preventDefault()
+    if (!newTableNumber.trim()) return
+    try {
+      const res = await fetch('/api/tables', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          restaurantId: CURRENT_RESTAURANT_ID,
+          tableNumber: newTableNumber.trim(),
+          capacity: newTableCapacity
+        })
+      })
+      if (!res.ok) throw new Error('Failed to add table')
+      success('Table added', `Table ${newTableNumber} created.`)
+      setNewTableNumber('')
+      setNewTableCapacity(4)
+      fetchTables()
+    } catch (e) {
+      error('Failed', e instanceof Error ? e.message : 'Could not add table')
+    }
+  }
+
+  const handleAddStockItem = async (e: React.FormEvent) => {
+    e.preventDefault()
+    if (!newStockBarcode.trim() || !newStockName.trim()) return
+    try {
+      const res = await fetch('/api/inventory', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          restaurantId: CURRENT_RESTAURANT_ID,
+          barcode: newStockBarcode.trim(),
+          name: newStockName.trim(),
+          quantity: newStockQty,
+          price: newStockPrice
+        })
+      })
+      if (!res.ok) throw new Error('Failed to add item')
+      success('Item added', `${newStockName} added to inventory.`)
+      setNewStockBarcode('')
+      setNewStockName('')
+      setNewStockQty(0)
+      setNewStockPrice(0)
+      fetchInventory()
+    } catch (e) {
+      error('Failed', e instanceof Error ? e.message : 'Could not add item')
+    }
+  }
+
+  const handleUpdateStockQuantity = async (id: string, quantity: number) => {
+    try {
+      const res = await fetch(`/api/inventory/${id}`, {
+        method: 'PATCH',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ quantity })
+      })
+      if (!res.ok) throw new Error('Update failed')
+      setInventory((prev) => prev.map((i) => (i.id === id ? { ...i, quantity } : i)))
+      success('Stock updated', 'Quantity saved.')
+    } catch (e) {
+      error('Update failed', e instanceof Error ? e.message : 'Could not update')
+    }
+  }
+
+  const getTableQrUrl = (tableNumber: string) => {
+    if (typeof window === 'undefined') return ''
+    const base = window.location.origin
+    const url = `${base}/restaurant/${CURRENT_RESTAURANT_ID}?table=${encodeURIComponent(tableNumber)}`
+    return `https://api.qrserver.com/v1/create-qr-code/?size=200x200&data=${encodeURIComponent(url)}`
+  }
+
+  /** Barcode image URL for printing (Code128) */
+  const getBarcodeImageUrl = (code: string) => {
+    return `https://barcode.tec-it.com/barcode.ashx?data=${encodeURIComponent(code)}&code=Code128&dpi=96&dataseparator=`
+  }
+
+  const printBarcodeLabel = (item: { barcode: string; name: string; price: number }) => {
+    const printWin = window.open('', '_blank', 'width=400,height=320')
+    if (!printWin) return
+    const barcodeImg = getBarcodeImageUrl(item.barcode)
+    printWin.document.write(`
+      <!DOCTYPE html>
+      <html>
+        <head><title>Barcode - ${item.name}</title>
+          <style>
+            body { font-family: sans-serif; padding: 20px; margin: 0; text-align: center; }
+            .label { border: 1px solid #ccc; padding: 16px; display: inline-block; min-width: 280px; }
+            .label h3 { margin: 0 0 8px 0; font-size: 16px; }
+            .label .price { font-size: 18px; font-weight: bold; color: #ea580c; margin: 8px 0; }
+            .label img { max-width: 100%; height: 60px; image-rendering: pixelated; }
+            .label .code { font-size: 11px; font-family: monospace; color: #666; margin-top: 4px; }
+          </style>
+        </head>
+        <body>
+          <div class="label">
+            <h3>${item.name}</h3>
+            <div class="price">A$${Number(item.price).toFixed(2)}</div>
+            <img src="${barcodeImg}" alt="Barcode" />
+            <div class="code">${item.barcode}</div>
+          </div>
+        </body>
+      </html>
+    `)
+    printWin.document.close()
+    printWin.focus()
+    setTimeout(() => { printWin.print(); printWin.close() }, 300)
   }
 
   const handleAddMenuItem = () => {
@@ -157,8 +304,9 @@ export function RestaurantDashboard() {
   }
 
   const pendingOrders = orders.filter((o) => o.status === 'pending')
+  const readyForBillingOrders = orders.filter((o) => o.status === 'ready')
   const historyOrders = orders
-    .filter((o) => o.status !== 'pending')
+    .filter((o) => o.status !== 'pending' && o.status !== 'ready')
     .sort((a, b) => new Date(b.createdAt).getTime() - new Date(a.createdAt).getTime())
 
   return (
@@ -171,6 +319,12 @@ export function RestaurantDashboard() {
               <h1 className="text-xl font-bold text-gray-900">Restaurant Dashboard</h1>
             </div>
             <div className="flex items-center gap-4">
+              <Link href="/system/dashboard">
+                <Button variant="ghost" size="sm">
+                  <Shield className="w-4 h-4 mr-2" />
+                  System control
+                </Button>
+              </Link>
               <Link href="/kitchen">
                 <Button variant="secondary" size="sm">
                   Kitchen View
@@ -201,11 +355,23 @@ export function RestaurantDashboard() {
           >
             <LayoutDashboard className="w-4 h-4 mr-2" />
             Pending Orders
-            {pendingOrders.length > 0 && (
-              <span className="ml-2 bg-white text-orange-600 text-xs font-bold px-2 py-0.5 rounded-full">
-                {pendingOrders.length}
-              </span>
-            )}
+            <span className={`ml-2 text-xs font-bold px-2 py-0.5 rounded-full min-w-[1.25rem] text-center ${pendingOrders.length > 0 ? 'bg-white text-orange-600' : 'bg-transparent text-transparent'}`}>
+              {pendingOrders.length}
+            </span>
+          </button>
+          <button
+            onClick={() => setActiveTab('ready')}
+            className={`flex items-center px-4 py-2 rounded-md font-medium transition-colors whitespace-nowrap ${
+              activeTab === 'ready'
+                ? 'bg-orange-600 text-white'
+                : 'bg-white text-gray-600 hover:bg-gray-50'
+            }`}
+          >
+            <LayoutDashboard className="w-4 h-4 mr-2" />
+            Ready for billing
+            <span className={`ml-2 text-xs font-bold px-2 py-0.5 rounded-full min-w-[1.25rem] text-center ${readyForBillingOrders.length > 0 ? 'bg-white text-orange-600' : 'bg-transparent text-transparent'}`}>
+              {readyForBillingOrders.length}
+            </span>
           </button>
           <button
             onClick={() => setActiveTab('history')}
@@ -229,10 +395,154 @@ export function RestaurantDashboard() {
             <Utensils className="w-4 h-4 mr-2" />
             Menu Items
           </button>
+          <button
+            onClick={() => setActiveTab('tables')}
+            className={`flex items-center px-4 py-2 rounded-md font-medium transition-colors whitespace-nowrap ${
+              activeTab === 'tables'
+                ? 'bg-orange-600 text-white'
+                : 'bg-white text-gray-600 hover:bg-gray-50'
+            }`}
+          >
+            <Hash className="w-4 h-4 mr-2" />
+            Tables & QR
+          </button>
+          <button
+            onClick={() => setActiveTab('stock')}
+            className={`flex items-center px-4 py-2 rounded-md font-medium transition-colors whitespace-nowrap ${
+              activeTab === 'stock'
+                ? 'bg-orange-600 text-white'
+                : 'bg-white text-gray-600 hover:bg-gray-50'
+            }`}
+          >
+            <Package className="w-4 h-4 mr-2" />
+            Stock
+          </button>
         </div>
 
         {/* Tab Content */}
-        {activeTab === 'menu' ? (
+        {activeTab === 'tables' ? (
+          <div>
+            <h2 className="text-lg font-semibold text-gray-900 mb-4">Tables & QR codes (dine-in)</h2>
+            <p className="text-sm text-gray-600 mb-4">Add tables and print QR codes so customers can scan to view the menu and order (table is tracked).</p>
+            <form onSubmit={handleAddTable} className="flex flex-wrap items-end gap-4 mb-6">
+              <div>
+                <label className="block text-xs font-medium text-gray-600 mb-1">Table number</label>
+                <input
+                  type="text"
+                  value={newTableNumber}
+                  onChange={(e) => setNewTableNumber(e.target.value)}
+                  placeholder="e.g. 5"
+                  className="rounded border border-gray-300 px-3 py-2 w-32"
+                />
+              </div>
+              <div>
+                <label className="block text-xs font-medium text-gray-600 mb-1">Capacity</label>
+                <input
+                  type="number"
+                  min={1}
+                  value={newTableCapacity}
+                  onChange={(e) => setNewTableCapacity(parseInt(e.target.value, 10) || 4)}
+                  className="rounded border border-gray-300 px-3 py-2 w-24"
+                />
+              </div>
+              <Button type="submit" variant="primary" disabled={!newTableNumber.trim()}>Add table</Button>
+            </form>
+            {tablesLoading ? (
+              <p className="text-gray-500">Loading tables...</p>
+            ) : tables.length === 0 ? (
+              <div className="bg-white rounded-lg border border-dashed border-gray-300 p-12 text-center text-gray-500">
+                No tables yet. Add a table above to generate a QR code for dine-in ordering.
+              </div>
+            ) : (
+              <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-6">
+                {tables.map((t) => (
+                  <Card key={t.id} className="p-4">
+                    <div className="flex items-start gap-4">
+                      <div className="flex-shrink-0 bg-white p-2 rounded border">
+                        <img src={getTableQrUrl(t.table_number)} alt={`Table ${t.table_number} QR`} width={120} height={120} />
+                      </div>
+                      <div>
+                        <h3 className="font-bold text-gray-900">Table {t.table_number}</h3>
+                        <p className="text-sm text-gray-500">Capacity: {t.capacity}</p>
+                        <p className="text-xs text-gray-500 mt-1">Scan to order at this table</p>
+                      </div>
+                    </div>
+                  </Card>
+                ))}
+              </div>
+            )}
+          </div>
+        ) : activeTab === 'stock' ? (
+          <div>
+            <h2 className="text-lg font-semibold text-gray-900 mb-4">Stock / Barcode items</h2>
+            <p className="text-sm text-gray-600 mb-4">Create barcode items for POS (e.g. water bottles). Leave barcode empty to auto-generate. Print labels and scan at POS to add to sale.</p>
+            <form onSubmit={handleAddStockItem} className="grid grid-cols-2 md:grid-cols-5 gap-3 mb-6">
+              <input type="text" value={newStockBarcode} onChange={(e) => setNewStockBarcode(e.target.value)} placeholder="Barcode (optional – auto-generated if empty)" className="rounded border border-gray-300 px-3 py-2" title="Leave empty to auto-generate a barcode" />
+              <input type="text" value={newStockName} onChange={(e) => setNewStockName(e.target.value)} placeholder="Name *" className="rounded border border-gray-300 px-3 py-2" required />
+              <input type="number" min={0} value={newStockQty} onChange={(e) => setNewStockQty(parseInt(e.target.value, 10) || 0)} placeholder="Qty" className="rounded border border-gray-300 px-3 py-2" />
+              <input type="number" step="0.01" min={0} value={newStockPrice} onChange={(e) => setNewStockPrice(parseFloat(e.target.value) || 0)} placeholder="Price" className="rounded border border-gray-300 px-3 py-2" />
+              <Button type="submit" variant="primary" disabled={!newStockName.trim()}>Add item</Button>
+            </form>
+            {inventoryLoading ? (
+              <p className="text-gray-500">Loading inventory...</p>
+            ) : inventory.length === 0 ? (
+              <div className="bg-white rounded-lg border border-dashed border-gray-300 p-12 text-center text-gray-500">
+                No barcode items yet. Add items above; they can be scanned in POS to add to sale and update stock.
+              </div>
+            ) : (
+              <Card className="overflow-hidden">
+                <table className="min-w-full divide-y divide-gray-200">
+                  <thead className="bg-gray-50">
+                    <tr>
+                      <th className="px-4 py-2 text-left text-xs font-medium text-gray-500">Barcode</th>
+                      <th className="px-4 py-2 text-left text-xs font-medium text-gray-500">Name</th>
+                      <th className="px-4 py-2 text-left text-xs font-medium text-gray-500">Quantity</th>
+                      <th className="px-4 py-2 text-left text-xs font-medium text-gray-500">Price</th>
+                      <th className="px-4 py-2 text-right text-xs font-medium text-gray-500">Actions</th>
+                    </tr>
+                  </thead>
+                  <tbody className="bg-white divide-y divide-gray-200">
+                    {inventory.map((i) => (
+                      <tr key={i.id}>
+                        <td className="px-4 py-3 text-sm font-mono">{i.barcode}</td>
+                        <td className="px-4 py-3 text-sm font-medium text-gray-900">{i.name}</td>
+                        <td className="px-4 py-3">
+                          <input
+                            type="number"
+                            min={0}
+                            value={i.quantity}
+                            onChange={(e) => {
+                              const q = parseInt(e.target.value, 10)
+                              if (!isNaN(q) && q >= 0) setInventory((prev) => prev.map((x) => (x.id === i.id ? { ...x, quantity: q } : x)))
+                            }}
+                            onBlur={(e) => {
+                              const q = parseInt(e.target.value, 10)
+                              if (!isNaN(q) && q >= 0) handleUpdateStockQuantity(i.id, q)
+                            }}
+                            className="w-20 rounded border border-gray-300 px-2 py-1 text-sm"
+                          />
+                        </td>
+                        <td className="px-4 py-3 text-sm">A${Number(i.price).toFixed(2)}</td>
+                        <td className="px-4 py-3 text-right">
+                          <Button
+                            type="button"
+                            variant="secondary"
+                            size="sm"
+                            onClick={() => printBarcodeLabel({ barcode: i.barcode, name: i.name, price: i.price })}
+                            title="Print barcode label"
+                          >
+                            <Printer className="w-4 h-4 mr-1" />
+                            Print barcode
+                          </Button>
+                        </td>
+                      </tr>
+                    ))}
+                  </tbody>
+                </table>
+              </Card>
+            )}
+          </div>
+        ) : activeTab === 'menu' ? (
           <div>
             <div className="flex justify-between items-center mb-6">
               <h2 className="text-lg font-semibold text-gray-900">Manage Menu</h2>
@@ -334,9 +644,13 @@ export function RestaurantDashboard() {
           </div>
         ) : (
           <>
-            {(activeTab === 'pending' ? pendingOrders : historyOrders).length > 0 ? (
+            {ordersLoading && (activeTab === 'pending' || activeTab === 'ready' || activeTab === 'history') ? (
+              <div className="text-center py-12 bg-white rounded-lg border border-dashed border-gray-300">
+                <p className="text-gray-500">Loading orders...</p>
+              </div>
+            ) : activeTab === 'pending' && pendingOrders.length > 0 ? (
               <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-6">
-                {(activeTab === 'pending' ? pendingOrders : historyOrders).map((order) => (
+                {pendingOrders.map((order) => (
                   <OrderCard
                     key={order.id}
                     order={order}
@@ -345,10 +659,28 @@ export function RestaurantDashboard() {
                   />
                 ))}
               </div>
+            ) : activeTab === 'ready' && readyForBillingOrders.length > 0 ? (
+              <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-6">
+                {readyForBillingOrders.map((order) => (
+                  <OrderCard
+                    key={order.id}
+                    order={order}
+                    onProceedToBilling={handleProceedToBilling}
+                  />
+                ))}
+              </div>
+            ) : activeTab === 'history' && historyOrders.length > 0 ? (
+              <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-6">
+                {historyOrders.map((order) => (
+                  <OrderCard key={order.id} order={order} />
+                ))}
+              </div>
             ) : (
               <div className="text-center py-12 bg-white rounded-lg border border-dashed border-gray-300">
                 <p className="text-gray-500 text-lg">
-                  {activeTab === 'pending' ? 'No pending orders.' : 'No order history yet.'}
+                  {activeTab === 'pending' && 'No pending orders.'}
+                  {activeTab === 'ready' && 'No orders ready for billing.'}
+                  {activeTab === 'history' && 'No order history yet.'}
                 </p>
               </div>
             )}

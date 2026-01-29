@@ -4,6 +4,7 @@ import { Plus } from 'lucide-react'
 import { MenuItem as MenuItemType } from '@/types'
 import { Button } from './ui/Button'
 import { useCart } from './providers/CartProvider'
+import { useNotification } from './providers/NotificationProvider'
 
 interface MenuItemProps {
   item: MenuItemType
@@ -11,6 +12,12 @@ interface MenuItemProps {
 
 export function MenuItem({ item }: MenuItemProps) {
   const { addItem } = useCart()
+  const { success } = useNotification()
+
+  const handleAdd = () => {
+    addItem(item)
+    success('Added to cart', item.name, { duration: 3000 })
+  }
 
   return (
     <div className="flex flex-col sm:flex-row gap-4 p-4 bg-white rounded-lg border border-gray-200 shadow-sm hover:shadow-md transition-shadow">
@@ -32,7 +39,7 @@ export function MenuItem({ item }: MenuItemProps) {
         <div className="mt-4 flex justify-end">
           <Button
             size="sm"
-            onClick={() => addItem(item)}
+            onClick={handleAdd}
             disabled={!item.isAvailable}
             className="w-full sm:w-auto"
           >

@@ -11,14 +11,30 @@ interface CartContextType {
   clearCart: () => void
   total: number
   itemCount: number
+  /** Table number when customer scans QR (dine-in); used at checkout */
+  tableNumber: string | null
+  setTableNumber: (table: string | null) => void
 }
 
 const CartContext = createContext<CartContextType | undefined>(undefined)
+const CART_TABLE_KEY = 'restaurant-cart-table'
 
 export function CartProvider({ children }: { children: React.ReactNode }) {
   const [items, setItems] = useState<CartItem[]>([])
+  const [tableNumber, setTableNumberState] = useState<string | null>(() => {
+    if (typeof window === 'undefined') return null
+    return localStorage.getItem(CART_TABLE_KEY)
+  })
 
-  // Load cart from local storage on mount
+  const setTableNumber = (table: string | null) => {
+    setTableNumberState(table)
+    if (typeof window !== 'undefined') {
+      if (table) localStorage.setItem(CART_TABLE_KEY, table)
+      else localStorage.removeItem(CART_TABLE_KEY)
+    }
+  }
+
+  // Load cart and table from local storage on mount
   useEffect(() => {
     const savedCart = localStorage.getItem('restaurant-cart')
     if (savedCart) {
@@ -28,6 +44,8 @@ export function CartProvider({ children }: { children: React.ReactNode }) {
         console.error('Failed to parse cart from local storage')
       }
     }
+    const savedTable = localStorage.getItem(CART_TABLE_KEY)
+    if (savedTable) setTableNumberState(savedTable)
   }, [])
 
   // Save cart to local storage on change
@@ -77,7 +95,9 @@ export function CartProvider({ children }: { children: React.ReactNode }) {
         updateQuantity,
         clearCart,
         total,
-        itemCount
+        itemCount,
+        tableNumber,
+        setTableNumber
       }}
     >
       {children}

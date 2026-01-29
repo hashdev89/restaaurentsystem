@@ -10,10 +10,12 @@ import {
   ChefHat, 
   CreditCard, 
   LayoutDashboard,
+  Shield,
   Menu,
   X
 } from 'lucide-react'
 import { useCart } from './providers/CartProvider'
+import { NotificationCenter } from './NotificationCenter'
 import { Button } from './ui/Button'
 
 export function Navigation() {
@@ -37,7 +39,8 @@ export function Navigation() {
   const staffLinks = [
     { href: '/kitchen', label: 'Kitchen', icon: ChefHat },
     { href: '/pos', label: 'POS', icon: CreditCard },
-    { href: '/restaurant/dashboard', label: 'Dashboard', icon: LayoutDashboard },
+    { href: '/restaurant/dashboard', label: 'Restaurant', icon: LayoutDashboard },
+    { href: '/system/dashboard', label: 'System', icon: Shield },
   ]
 
   return (
@@ -52,6 +55,7 @@ export function Navigation() {
 
           {/* Desktop Navigation */}
           <div className="hidden md:flex items-center space-x-1">
+            <NotificationCenter className="mr-1" />
             {navLinks.map((link) => {
               const Icon = link.icon
               return (
@@ -63,8 +67,8 @@ export function Navigation() {
                   >
                     <Icon className="w-4 h-4 mr-2" />
                     {link.label}
-                    {link.badge !== undefined && link.badge > 0 && (
-                      <span className="ml-2 bg-orange-600 text-white text-xs font-bold rounded-full px-2 py-0.5">
+                    {link.badge !== undefined && (
+                      <span className={`ml-2 text-xs font-bold rounded-full px-2 py-0.5 min-w-[1.25rem] text-center ${link.badge > 0 ? 'bg-orange-600 text-white' : 'bg-transparent text-transparent'}`}>
                         {link.badge}
                       </span>
                     )}
@@ -92,18 +96,21 @@ export function Navigation() {
             })}
           </div>
 
-          {/* Mobile Menu Button */}
-          <button
-            onClick={() => setMobileMenuOpen(!mobileMenuOpen)}
-            className="md:hidden p-2 rounded-md text-gray-600 hover:text-gray-900 hover:bg-gray-100"
-            aria-label="Toggle menu"
-          >
+          {/* Mobile: notification bell + menu button */}
+          <div className="md:hidden flex items-center gap-1">
+            <NotificationCenter />
+            <button
+              onClick={() => setMobileMenuOpen(!mobileMenuOpen)}
+              className="p-2 rounded-md text-gray-600 hover:text-gray-900 hover:bg-gray-100"
+              aria-label="Toggle menu"
+            >
             {mobileMenuOpen ? (
               <X className="w-6 h-6" />
             ) : (
               <Menu className="w-6 h-6" />
             )}
           </button>
+          </div>
         </div>
 
         {/* Mobile Menu */}
@@ -125,8 +132,8 @@ export function Navigation() {
                   >
                     <Icon className="w-5 h-5 mr-3" />
                     {link.label}
-                    {link.badge !== undefined && link.badge > 0 && (
-                      <span className="ml-auto bg-orange-600 text-white text-xs font-bold rounded-full px-2 py-0.5">
+                    {link.badge !== undefined && (
+                      <span className={`ml-auto text-xs font-bold rounded-full px-2 py-0.5 min-w-[1.25rem] text-center ${link.badge > 0 ? 'bg-orange-600 text-white' : 'bg-transparent text-transparent'}`}>
                         {link.badge}
                       </span>
                     )}

@@ -1,86 +1,66 @@
 'use client'
 
-import { useState, useEffect } from 'react'
-import { Clock, CheckCircle, XCircle, Timer } from 'lucide-react'
+import { useState, useEffect, useCallback } from 'react'
+import { Timer } from 'lucide-react'
 import { Card } from '../ui/Card'
 import { Badge } from '../ui/Badge'
 import { Button } from '../ui/Button'
+import { useNotification } from '../providers/NotificationProvider'
 import { Order, OrderStatus } from '@/types'
+import { normalizeOrders, type SupabaseOrderRow } from '@/lib/orders'
 
-// Mock orders for KDS
-const MOCK_KDS_ORDERS: Order[] = [
-  {
-    id: 'ORD-001',
-    restaurantId: 'rest_1',
-    customerName: 'Table 5',
-    customerEmail: '',
-    customerPhone: '',
-    items: [
-      { menuItemId: '1', name: 'Aussie Beef Pie', quantity: 2, price: 12.99 },
-      { menuItemId: '2', name: 'Fish & Chips', quantity: 1, price: 18.5 }
-    ],
-    total: 44.48,
-    status: 'preparing',
-    orderType: 'dine-in',
-    tableNumber: '5',
-    createdAt: new Date(Date.now() - 1000 * 60 * 10).toISOString(),
-    paymentStatus: 'captured'
-  },
-  {
-    id: 'ORD-002',
-    restaurantId: 'rest_1',
-    customerName: 'Pickup - John',
-    customerEmail: '',
-    customerPhone: '',
-    items: [{ menuItemId: '3', name: 'Aussie Burger', quantity: 1, price: 16.99 }],
-    total: 18.69,
-    status: 'accepted',
-    orderType: 'pickup',
-    createdAt: new Date(Date.now() - 1000 * 60 * 5).toISOString(),
-    paymentStatus: 'captured'
-  },
-  {
-    id: 'ORD-003',
-    restaurantId: 'rest_1',
-    customerName: 'Table 12',
-    customerEmail: '',
-    customerPhone: '',
-    items: [
-      { menuItemId: '4', name: 'Pavlova', quantity: 2, price: 9.5 },
-      { menuItemId: '1', name: 'Aussie Beef Pie', quantity: 1, price: 12.99 }
-    ],
-    total: 32.49,
-    status: 'preparing',
-    orderType: 'dine-in',
-    tableNumber: '12',
-    createdAt: new Date(Date.now() - 1000 * 60 * 8).toISOString(),
-    paymentStatus: 'captured'
-  }
-]
+const KDS_RESTAURANT_ID = 'rest_1'
+const KDS_POLL_MS = 5000
 
 export function KitchenDisplaySystem() {
-  const [orders, setOrders] = useState<Order[]>(MOCK_KDS_ORDERS)
+  const { success, info } = useNotification()
+  const [orders, setOrders] = useState<Order[]>([])
   const [filter, setFilter] = useState<OrderStatus | 'all'>('all')
 
-  useEffect(() => {
-    // In production, use Supabase real-time subscriptions
-    const interval = setInterval(() => {
-      // Simulate order updates
-    }, 5000)
-    return () => clearInterval(interval)
+  const fetchOrders = useCallback(async () => {
+    try {
+      const res = await fetch(`/api/orders?restaurantId=${KDS_RESTAURANT_ID}`)
+      if (!res.ok) return
+      const data = await res.json()
+      const list = (data.orders || []) as SupabaseOrderRow[]
+      const normalized = normalizeOrders(list)
+      setOrders(normalized.filter((o) => ['accepted', 'preparing', 'ready'].includes(o.status)))
+    } catch (e) {
+      console.error('KDS fetch orders error:', e)
+    }
   }, [])
+
+  useEffect(() => {
+    fetchOrders()
+    const interval = setInterval(fetchOrders, KDS_POLL_MS)
+    return () => clearInterval(interval)
+  }, [fetchOrders])
 
   const filteredOrders = orders.filter(
     (order) => filter === 'all' || order.status === filter
   )
 
-  const updateOrderStatus = (orderId: string, newStatus: OrderStatus) => {
-    setOrders((prev) =>
-      prev.map((order) =>
-        order.id === orderId ? { ...order, status: newStatus } : order
-      )
-    )
-    // In production, update in Supabase
+  const updateOrderStatus = async (orderId: string, newStatus: OrderStatus) => {
+    const order = orders.find((o) => o.id === orderId)
+    try {
+      const res = await fetch(`/api/orders/${orderId}`, {
+        method: 'PATCH',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ status: newStatus })
+      })
+      if (!res.ok) throw new Error('Update failed')
+      setOrders((prev) => prev.map((o) => (o.id === orderId ? { ...o, status: newStatus } : o)))
+      const label = order ? `Order #${orderId.slice(-8)}` : orderId
+      if (newStatus === 'ready') {
+        success('Order ready', `${label} is ready for pickup / delivery.`)
+      } else if (newStatus === 'completed') {
+        success('Order completed', `${label} has been completed.`)
+      } else {
+        info('Status updated', `${label} → ${newStatus}.`)
+      }
+    } catch (e) {
+      console.error('KDS update status error:', e)
+    }
   }
 
   const getElapsedTime = (createdAt: string) => {

@@ -1,4 +1,6 @@
 -- Supabase Database Schema for Restaurant Ordering System
+-- Tables: restaurants, menu_items, orders, order_items, users, tables, seat_bookings
+-- Then run supabase-migrations.sql for: menu_items (barcode, stock_quantity), inventory, and app policies
 
 -- Restaurants Table
 CREATE TABLE restaurants (

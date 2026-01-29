@@ -1,7 +1,7 @@
 'use client'
 
 import { useEffect, useState } from 'react'
-import { useParams, useRouter } from 'next/navigation'
+import { useParams, useRouter, useSearchParams } from 'next/navigation'
 import Link from 'next/link'
 import { ShoppingBag, Search, ArrowLeft, MapPin, Phone, Star, StarHalf, Calendar } from 'lucide-react'
 import { MenuItem } from '@/components/MenuItem'
@@ -175,7 +175,9 @@ export function CustomerMenu() {
   const params = useParams()
   const router = useRouter()
   const restaurantId = params?.restaurantId as string
-  const { itemCount, total } = useCart()
+  const { itemCount, total, setTableNumber } = useCart()
+  const searchParams = useSearchParams()
+  const tableFromUrl = searchParams.get('table')
   const [selectedCategory, setSelectedCategory] = useState('All')
   const [searchQuery, setSearchQuery] = useState('')
   const [restaurant, setRestaurant] = useState<Restaurant | null>(null)
@@ -186,6 +188,10 @@ export function CustomerMenu() {
       setRestaurant(foundRestaurant)
     }
   }, [restaurantId])
+
+  useEffect(() => {
+    if (tableFromUrl) setTableNumber(tableFromUrl)
+  }, [tableFromUrl, setTableNumber])
 
   const renderStars = (rating: number) => {
     const stars = []

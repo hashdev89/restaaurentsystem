@@ -1,10 +1,11 @@
 'use client'
 
-import { useState } from 'react'
+import { useState, useEffect } from 'react'
 import { useRouter } from 'next/navigation'
 import Link from 'next/link'
 import { ArrowLeft, CreditCard, Lock } from 'lucide-react'
 import { useCart } from '../providers/CartProvider'
+import { useNotification } from '../providers/NotificationProvider'
 import { Button } from '../ui/Button'
 import { Input } from '../ui/Input'
 import { Card } from '../ui/Card'
@@ -12,11 +13,16 @@ import { Select } from '../ui/Select'
 import { OrderType } from '@/types'
 
 export function Checkout() {
-  const { items, total, clearCart } = useCart()
+  const { items, total, clearCart, tableNumber: cartTable } = useCart()
+  const { success, error } = useNotification()
   const router = useRouter()
   const [isProcessing, setIsProcessing] = useState(false)
   const [orderType, setOrderType] = useState<OrderType>('dine-in')
-  const [tableNumber, setTableNumber] = useState('')
+  const [tableNumber, setTableNumber] = useState(cartTable ?? '')
+
+  useEffect(() => {
+    if (cartTable) setTableNumber(cartTable)
+  }, [cartTable])
 
   // Form State
   const [formData, setFormData] = useState({
@@ -36,22 +42,72 @@ export function Checkout() {
     }))
   }
 
+  const finalTotal = total * 1.1 // Include GST
+
+  const createOrderInSupabase = async (opts: { paymentStatus: string; squarePaymentId?: string }) => {
+    const orderResponse = await fetch('/api/orders', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({
+        restaurantId: items[0]?.restaurantId || '',
+        customerName: formData.name,
+        customerEmail: formData.email,
+        customerPhone: formData.phone,
+        items: items.map((item) => ({
+          menuItemId: item.id,
+          name: item.name,
+          quantity: item.quantity,
+          price: item.price
+        })),
+        total: finalTotal,
+        status: 'pending',
+        orderType,
+        tableNumber: orderType === 'dine-in' ? tableNumber : null,
+        paymentStatus: opts.paymentStatus,
+        squarePaymentId: opts.squarePaymentId || null
+      })
+    })
+    if (!orderResponse.ok) {
+      const errData = await orderResponse.json().catch(() => ({}))
+      throw new Error(errData.error || 'Failed to create order')
+    }
+    return orderResponse.json()
+  }
+
+  const handlePlaceOrderPayAtTable = async (e: React.FormEvent) => {
+    e.preventDefault()
+    if (!formData.name.trim() || !formData.email.trim() || !formData.phone.trim()) {
+      error('Missing details', 'Please enter name, email and phone.')
+      return
+    }
+    setIsProcessing(true)
+    try {
+      const orderData = await createOrderInSupabase({ paymentStatus: 'pending' })
+      clearCart()
+      success('Order placed', `Order sent to the restaurant. You can pay at the table.`, {
+        actionHref: `/confirmation?orderId=${orderData.orderId}&orderType=${orderType}`,
+        actionLabel: 'View confirmation'
+      })
+      router.push(`/confirmation?orderId=${orderData.orderId}&orderType=${orderType}`)
+    } catch (err: unknown) {
+      const msg = err instanceof Error ? err.message : 'Failed to place order'
+      error('Order failed', msg)
+    } finally {
+      setIsProcessing(false)
+    }
+  }
+
   const handleSubmit = async (e: React.FormEvent) => {
     e.preventDefault()
     setIsProcessing(true)
 
     try {
-      const finalTotal = total * 1.1 // Include GST
-      
-      // Process payment with Square first
-      // Note: In production, you should use Square Web SDK on the client side
-      // For now, we'll use a server-side approach
       const paymentResponse = await fetch('/api/square/payment', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({
           amount: finalTotal,
-          sourceId: 'card', // In production, this comes from Square Web SDK
+          sourceId: 'card',
           orderId: `ORD-${Date.now()}`
         })
       })
@@ -62,47 +118,25 @@ export function Checkout() {
       }
 
       const paymentData = await paymentResponse.json()
-
-      // Create order in Supabase
-      const orderResponse = await fetch('/api/orders', {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({
-          restaurantId: items[0]?.restaurantId || '',
-          customerName: formData.name,
-          customerEmail: formData.email,
-          customerPhone: formData.phone,
-          items: items.map((item) => ({
-            menuItemId: item.id,
-            name: item.name,
-            quantity: item.quantity,
-            price: item.price
-          })),
-          total: finalTotal,
-          status: 'pending',
-          orderType,
-          tableNumber: orderType === 'dine-in' ? tableNumber : null,
-          paymentStatus: paymentData.status === 'COMPLETED' ? 'captured' : 'authorized',
-          squarePaymentId: paymentData.paymentId
-        })
+      const orderData = await createOrderInSupabase({
+        paymentStatus: paymentData.status === 'COMPLETED' ? 'captured' : 'authorized',
+        squarePaymentId: paymentData.paymentId
       })
 
-      if (!orderResponse.ok) {
-        throw new Error('Failed to create order')
-      }
-
-      const orderData = await orderResponse.json()
       clearCart()
+      success('Order placed', `Order #${orderData.orderId} confirmed. Redirecting…`, {
+        actionHref: `/confirmation?orderId=${orderData.orderId}&orderType=${orderType}`,
+        actionLabel: 'View confirmation',
+      })
       router.push(`/confirmation?orderId=${orderData.orderId}&orderType=${orderType}`)
-    } catch (error: any) {
-      console.error('Checkout error:', error)
-      alert(error.message || 'Payment failed. Please try again.')
+    } catch (err: unknown) {
+      const msg = err instanceof Error ? err.message : 'Payment failed. Please try again.'
+      console.error('Checkout error:', err)
+      error('Checkout failed', msg)
     } finally {
       setIsProcessing(false)
     }
   }
-
-  const finalTotal = total * 1.1 // 10% GST for Australia
 
   return (
     <div className="min-h-screen bg-gray-50 py-8 px-4 sm:px-6 lg:px-8">
@@ -232,16 +266,28 @@ export function Checkout() {
             {/* Total and Submit */}
             <div className="flex flex-col gap-4">
               <div className="flex justify-between items-center text-lg font-bold text-gray-900 px-2">
-                <span>Total to Pay (GST included)</span>
+                <span>Total (GST included)</span>
                 <span>${finalTotal.toFixed(2)}</span>
               </div>
+              {orderType === 'dine-in' && (
+                <Button
+                  type="button"
+                  variant="secondary"
+                  size="lg"
+                  className="w-full text-lg"
+                  disabled={isProcessing}
+                  onClick={handlePlaceOrderPayAtTable}
+                >
+                  {isProcessing ? 'Placing order...' : 'Place order (pay at table)'}
+                </Button>
+              )}
               <Button
                 type="submit"
                 size="lg"
                 className="w-full text-lg"
                 isLoading={isProcessing}
               >
-                {isProcessing ? 'Processing...' : `Pay $${finalTotal.toFixed(2)}`}
+                {isProcessing ? 'Processing...' : `Pay $${finalTotal.toFixed(2)} now`}
               </Button>
             </div>
           </div>

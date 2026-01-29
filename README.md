@@ -57,7 +57,13 @@ NEXT_PUBLIC_SQUARE_ENVIRONMENT=sandbox
 
 3. Set up Supabase database:
 
-Run the SQL schema from `supabase-schema.sql` in your Supabase SQL editor to create the necessary tables.
+Run the SQL schema from `supabase-schema.sql` in your Supabase SQL editor to create the necessary tables. **Seed at least one restaurant** (e.g. insert into `restaurants` and note its UUID). Then set in `.env.local`:
+
+```env
+NEXT_PUBLIC_DEFAULT_RESTAURANT_ID=<that_restaurant_uuid>
+```
+
+This links customer/dashboard/POS/KDS to the same restaurant when using the default `rest_1` in the app.
 
 4. Run the development server:
 

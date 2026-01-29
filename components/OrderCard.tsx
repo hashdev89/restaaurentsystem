@@ -10,9 +10,10 @@ interface OrderCardProps {
   order: Order
   onAccept?: (orderId: string) => void
   onReject?: (orderId: string) => void
+  onProceedToBilling?: (orderId: string) => void
 }
 
-export function OrderCard({ order, onAccept, onReject }: OrderCardProps) {
+export function OrderCard({ order, onAccept, onReject, onProceedToBilling }: OrderCardProps) {
   const statusVariant = {
     pending: 'warning',
     accepted: 'success',
@@ -98,6 +99,18 @@ export function OrderCard({ order, onAccept, onReject }: OrderCardProps) {
           >
             <Check className="w-4 h-4 mr-2" />
             Accept
+          </Button>
+        </div>
+      )}
+      {order.status === 'ready' && onProceedToBilling && (
+        <div className="mt-auto">
+          <Button
+            variant="primary"
+            className="w-full bg-green-600 hover:bg-green-700 text-white"
+            onClick={() => onProceedToBilling(order.id)}
+          >
+            <Check className="w-4 h-4 mr-2" />
+            Proceed to billing
           </Button>
         </div>
       )}
