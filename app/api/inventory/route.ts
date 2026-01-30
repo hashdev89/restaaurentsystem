@@ -32,16 +32,17 @@ export async function GET(request: NextRequest) {
     if (error) throw error
 
     return NextResponse.json({ items: data ?? [] })
-  } catch (error: any) {
-    console.error('Get inventory error:', error)
-    return NextResponse.json({ error: error.message || 'Failed to fetch inventory' }, { status: 500 })
+  } catch (err: unknown) {
+    console.error('Get inventory error:', err)
+    const message = err instanceof Error ? err.message : 'Failed to fetch inventory'
+    return NextResponse.json({ error: message }, { status: 500 })
   }
 }
 
 export async function POST(request: NextRequest) {
   try {
     const body = await request.json()
-    let { restaurantId, barcode, name, quantity, price } = body
+    const { restaurantId, barcode, name, quantity, price } = body
 
     if (!restaurantId || !name) {
       return NextResponse.json({ error: 'restaurantId and name are required' }, { status: 400 })
@@ -65,8 +66,9 @@ export async function POST(request: NextRequest) {
 
     if (error) throw error
     return NextResponse.json({ item: data }, { status: 201 })
-  } catch (error: any) {
-    console.error('Create inventory error:', error)
-    return NextResponse.json({ error: error.message || 'Failed to create item' }, { status: 500 })
+  } catch (err: unknown) {
+    console.error('Create inventory error:', err)
+    const message = err instanceof Error ? err.message : 'Failed to create item'
+    return NextResponse.json({ error: message }, { status: 500 })
   }
 }

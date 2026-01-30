@@ -36,9 +36,8 @@ import { Badge } from '../ui/Badge'
 import { Dialog, DialogContent } from '../ui/dialog'
 import { Tabs, TabsList, TabsTrigger } from '../ui/tabs'
 import { cn } from '@/lib/utils'
-import { OrderType, Order } from '@/types'
+import { OrderType } from '@/types'
 import { MOCK_RESTAURANTS } from './RestaurantList'
-import { normalizeOrders, type SupabaseOrderRow } from '@/lib/orders'
 
 // Types
 interface CustomizationOption {
@@ -603,14 +602,9 @@ export function POSSystem() {
   const searchInputRef = useRef<HTMLInputElement>(null)
   const [activeSection, setActiveSection] = useState<'menu' | 'orders' | 'transactions' | 'items' | 'more'>('menu')
   const [orders, setOrders] = useState<any[]>([])
-  const [apiOrders, setApiOrders] = useState<Order[]>([])
-  const [apiOrdersLoading, setApiOrdersLoading] = useState(false)
-  const lastPendingIdsRef = useRef<Set<string>>(new Set())
   const [transactions, setTransactions] = useState<any[]>([])
   const [showItemModal, setShowItemModal] = useState(false)
   const [editingItem, setEditingItem] = useState<POSSubItem | null>(null)
-  const [barcodeInput, setBarcodeInput] = useState('')
-  const barcodeInputRef = useRef<HTMLInputElement>(null)
   // Categories state so we can add/edit/delete items (initialized from POS_CATEGORIES)
   const [categories, setCategories] = useState<POSCategory[]>(() =>
     POS_CATEGORIES.map(cat => ({ ...cat, subItems: cat.subItems.map(s => ({ ...s })) }))
@@ -636,7 +630,7 @@ export function POSSystem() {
 
   // Get available item count for each category
   const getCategoryItemCount = (categoryId: string) => {
-    const category = categories.find(cat => cat.id === categoryId)
+    const category = POS_CATEGORIES.find(cat => cat.id === categoryId)
     return category ? category.subItems.filter(item => item.isAvailable).length : 0
   }
 
@@ -1311,291 +1305,35 @@ export function POSSystem() {
     return () => window.removeEventListener('keydown', handleKeyPress)
   }, [showCustomizationModal, showPaymentModal, showDiscountModal, cart])
 
-  const POS_RESTAURANT_ID = MOCK_RESTAURANTS[0].id
-  const fetchApiOrders = useCallback(async () => {
-    try {
-      setApiOrdersLoading(true)
-      const res = await fetch(`/api/orders?restaurantId=${POS_RESTAURANT_ID}`)
-      if (!res.ok) return
-      const data = await res.json()
-      const list = (data.orders || []) as SupabaseOrderRow[]
-      const normalized = normalizeOrders(list)
-      const pendingIds = new Set(normalized.filter((o) => o.status === 'pending').map((o) => o.id))
-      const prev = lastPendingIdsRef.current
-      const newPending = [...pendingIds].filter((id) => !prev.has(id))
-      lastPendingIdsRef.current = pendingIds
-      setApiOrders(normalized)
-      if (newPending.length > 0) {
-        success('New order', `${newPending.length} new order(s) received. Check Orders.`, {
-          actionHref: undefined,
-          actionLabel: undefined
-        })
-      }
-    } catch (e) {
-      console.error('POS fetch orders error:', e)
-    } finally {
-      setApiOrdersLoading(false)
-    }
-  }, [success])
-
-  useEffect(() => {
-    fetchApiOrders()
-    const interval = setInterval(fetchApiOrders, 8000)
-    return () => clearInterval(interval)
-  }, [fetchApiOrders])
-
-  const updateApiOrderStatus = useCallback(
-    async (orderId: string, status: Order['status']) => {
-      try {
-        const res = await fetch(`/api/orders/${orderId}`, {
-          method: 'PATCH',
-          headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify({ status })
-        })
-        if (!res.ok) throw new Error('Update failed')
-        setApiOrders((prev) => prev.map((o) => (o.id === orderId ? { ...o, status } : o)))
-        if (status === 'accepted') success('Order accepted', 'Order sent to kitchen.')
-        else if (status === 'completed') success('Order completed', 'Ready for billing.')
-      } catch (e) {
-        warning('Update failed', e instanceof Error ? e.message : 'Could not update order')
-      }
-    },
-    [success, warning]
-  )
-
-  const addToCartByBarcode = useCallback(
-    async (barcode: string) => {
-      const code = String(barcode).trim()
-      if (!code) return
-      try {
-        const res = await fetch(`/api/inventory?restaurantId=${POS_RESTAURANT_ID}&barcode=${encodeURIComponent(code)}`)
-        if (!res.ok) return
-        const data = await res.json()
-        const items = data.items ?? []
-        const invItem = items[0]
-        if (!invItem) {
-          warning('Barcode not found', `No item with barcode "${code}". Add it in Dashboard → Stock.`)
-          return
-        }
-        const qty = Number(invItem.quantity) ?? 0
-        if (qty < 1) {
-          warning('Out of stock', `${invItem.name} has 0 quantity. Restock in Dashboard → Stock.`)
-          return
-        }
-        const price = Number(invItem.price) ?? 0
-        const priceExGst = price / (1 + GST_RATE)
-        const gstAmount = priceExGst * GST_RATE
-        const cartItem: CartItem = {
-          id: `inv_${invItem.id}-${Date.now()}`,
-          name: invItem.name,
-          description: 'Barcode item',
-          basePrice: priceExGst,
-          quantity: 1,
-          categoryName: 'Barcode',
-          customizations: [],
-          finalPrice: price,
-          gstAmount
-        }
-        setCart((prev) => {
-          const existing = prev.find((c) => c.name === invItem.name && c.categoryName === 'Barcode' && c.basePrice === priceExGst)
-          if (existing) {
-            return prev.map((c) => (c.id === existing.id ? { ...c, quantity: c.quantity + 1 } : c))
-          }
-          return [...prev, cartItem]
-        })
-        const newQty = Math.max(0, qty - 1)
-        await fetch(`/api/inventory/${invItem.id}`, {
-          method: 'PATCH',
-          headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify({ quantity: newQty })
-        })
-        success('Added', `${invItem.name} added to cart. Stock: ${newQty}`)
-        setBarcodeInput('')
-      } catch (e) {
-        console.error('Barcode add error:', e)
-        warning('Error', 'Could not add barcode item.')
-      }
-    },
-    [success, warning]
-  )
-
   const customizationPrice = selectedItem ? calculateCustomizationPrice() : 0
   const itemPriceExGst = selectedItem ? selectedItem.basePrice + customizationPrice : 0
   const itemGstAmount = itemPriceExGst * GST_RATE
   const itemFinalPrice = itemPriceExGst + itemGstAmount
 
-  // Item form state for Add/Edit modal
-  type ItemFormData = {
-    categoryId: string
-    name: string
-    description: string
-    basePrice: number
-    image: string
-    isAvailable: boolean
-    popular: boolean
-    customizations: CustomizationGroup[]
-  }
-  const defaultItemForm = (): ItemFormData => ({
-    categoryId: categories[0]?.id ?? 'burgers',
-    name: '',
-    description: '',
-    basePrice: 0,
-    image: 'https://images.unsplash.com/photo-1546069901-ba9599a7e63c?w=800&q=80',
-    isAvailable: true,
-    popular: false,
-    customizations: []
-  })
-  const [itemForm, setItemForm] = useState<ItemFormData | null>(null)
-
-  const openAddItemModal = () => {
+  // Item management functions
+  const handleAddItem = () => {
     setEditingItem(null)
-    setItemForm(defaultItemForm())
     setShowItemModal(true)
   }
 
-  const openEditItemModal = (item: POSSubItem) => {
-    const category = categories.find(cat => cat.subItems.some(s => s.id === item.id))
-    const cust = getDefaultCustomizations(item.id, item)
-    const customizations = cust.map(g => ({
-      ...g,
-      options: g.options.map(o => ({ ...o }))
-    }))
+  const handleEditItem = (item: POSSubItem) => {
     setEditingItem(item)
-    setItemForm({
-      categoryId: category?.id ?? categories[0]?.id ?? 'burgers',
-      name: item.name,
-      description: item.description,
-      basePrice: item.basePrice,
-      image: item.image,
-      isAvailable: item.isAvailable,
-      popular: item.popular ?? false,
-      customizations
-    })
     setShowItemModal(true)
   }
-
-  const handleAddItem = openAddItemModal
-  const handleEditItem = openEditItemModal
 
   const handleDeleteItem = (itemId: string) => {
-    if (!confirm('Are you sure you want to delete this item?')) return
-    setCategories(prev =>
-      prev.map(cat => ({
-        ...cat,
-        subItems: cat.subItems.filter(s => s.id !== itemId)
-      }))
-    )
-    success('Item removed', 'Item has been deleted from the menu.')
-  }
-
-  const addCustomizationGroup = () => {
-    if (!itemForm) return
-    const id = `grp_${Date.now()}`
-    setItemForm({
-      ...itemForm,
-      customizations: [
-        ...itemForm.customizations,
-        { id, name: 'New group', type: 'add', options: [] }
-      ]
-    })
-  }
-
-  const updateCustomizationGroup = (groupIndex: number, updates: Partial<CustomizationGroup>) => {
-    if (!itemForm) return
-    const next = [...itemForm.customizations]
-    next[groupIndex] = { ...next[groupIndex], ...updates }
-    setItemForm({ ...itemForm, customizations: next })
-  }
-
-  const removeCustomizationGroup = (groupIndex: number) => {
-    if (!itemForm) return
-    setItemForm({
-      ...itemForm,
-      customizations: itemForm.customizations.filter((_, i) => i !== groupIndex)
-    })
-  }
-
-  const addCustomizationOption = (groupIndex: number) => {
-    if (!itemForm) return
-    const id = `opt_${Date.now()}`
-    const next = [...itemForm.customizations]
-    next[groupIndex] = {
-      ...next[groupIndex],
-      options: [...next[groupIndex].options, { id, name: 'New option', price: 0 }]
+    if (confirm('Are you sure you want to delete this item?')) {
+      // In a real app, this would update the POS_CATEGORIES
+      // For now, we'll just show a message
+      alert('Item deletion would be implemented with backend integration')
     }
-    setItemForm({ ...itemForm, customizations: next })
   }
 
-  const updateCustomizationOption = (groupIndex: number, optionIndex: number, updates: Partial<CustomizationOption>) => {
-    if (!itemForm) return
-    const next = [...itemForm.customizations]
-    const opts = [...next[groupIndex].options]
-    opts[optionIndex] = { ...opts[optionIndex], ...updates }
-    next[groupIndex] = { ...next[groupIndex], options: opts }
-    setItemForm({ ...itemForm, customizations: next })
-  }
-
-  const removeCustomizationOption = (groupIndex: number, optionIndex: number) => {
-    if (!itemForm) return
-    const next = [...itemForm.customizations]
-    next[groupIndex] = {
-      ...next[groupIndex],
-      options: next[groupIndex].options.filter((_, i) => i !== optionIndex)
-    }
-    setItemForm({ ...itemForm, customizations: next })
-  }
-
-  const handleSaveItem = () => {
-    if (!itemForm) return
-    const { name, description, basePrice, image, isAvailable, popular, categoryId, customizations } = itemForm
-    if (!name.trim()) {
-      warning('Missing name', 'Please enter an item name.')
-      return
-    }
-    if (basePrice < 0) {
-      warning('Invalid price', 'Base price must be 0 or greater.')
-      return
-    }
-
-    const payload: POSSubItem = {
-      id: editingItem?.id ?? `custom_${Date.now()}`,
-      name: name.trim(),
-      description: (description || '').trim(),
-      basePrice: Number(basePrice) || 0,
-      image: image || defaultItemForm().image,
-      isAvailable,
-      popular,
-      customizations: customizations.length ? customizations : undefined
-    }
-
-    if (editingItem) {
-      const oldCategoryId = categories.find(cat => cat.subItems.some(s => s.id === editingItem.id))?.id
-      setCategories(prev =>
-        prev.map(cat => {
-          if (cat.id === oldCategoryId && cat.id === categoryId) {
-            return { ...cat, subItems: cat.subItems.map(s => (s.id === editingItem.id ? payload : s)) }
-          }
-          if (cat.id === oldCategoryId) {
-            return { ...cat, subItems: cat.subItems.filter(s => s.id !== editingItem.id) }
-          }
-          if (cat.id === categoryId) {
-            return { ...cat, subItems: [...cat.subItems, payload] }
-          }
-          return cat
-        })
-      )
-      success('Item updated', `${name} has been updated.`)
-    } else {
-      setCategories(prev =>
-        prev.map(cat =>
-          cat.id === categoryId ? { ...cat, subItems: [...cat.subItems, payload] } : cat
-        )
-      )
-      success('Item added', `${name} has been added to the menu.`)
-    }
+  const handleSaveItem = (itemData: Partial<POSSubItem>) => {
+    // In a real app, this would save to backend
+    alert('Item saved! (Backend integration needed for persistence)')
     setShowItemModal(false)
     setEditingItem(null)
-    setItemForm(null)
   }
 
   // Get all items for Items section
@@ -1803,37 +1541,6 @@ export function POSSystem() {
 
         {/* Right Panel - Cart (30%) */}
         <div className="w-[30%] flex flex-col bg-gray-50 border-l-2 border-gray-200">
-          {/* Barcode scan - add items from inventory */}
-          {activeSection === 'menu' && (
-            <div className="p-3 bg-white border-b border-gray-200">
-              <label className="block text-xs font-medium text-gray-600 mb-1">Scan barcode (e.g. water bottles)</label>
-              <div className="flex gap-2">
-                <Input
-                  ref={barcodeInputRef}
-                  type="text"
-                  placeholder="Scan or type barcode..."
-                  value={barcodeInput}
-                  onChange={(e) => setBarcodeInput(e.target.value)}
-                  onKeyDown={(e) => {
-                    if (e.key === 'Enter') {
-                      e.preventDefault()
-                      addToCartByBarcode(barcodeInput)
-                    }
-                  }}
-                  className="flex-1 font-mono text-sm"
-                />
-                <Button
-                  type="button"
-                  variant="secondary"
-                  size="sm"
-                  onClick={() => addToCartByBarcode(barcodeInput)}
-                  disabled={!barcodeInput.trim()}
-                >
-                  Add
-                </Button>
-              </div>
-            </div>
-          )}
           {/* Cart Items - Scrollable */}
           <div className="flex-1 overflow-y-auto p-4">
                 {cart.length === 0 ? (
@@ -2017,11 +1724,11 @@ export function POSSystem() {
           </>
         )}
 
-        {/* Orders Section - Customer & API orders */}
+        {/* Orders Section */}
         {activeSection === 'orders' && (
           <div className="w-full flex flex-col bg-white overflow-hidden">
             <div className="p-6 border-b border-gray-200">
-              <h2 className="text-2xl font-bold text-gray-900 mb-4">Orders</h2>
+              <h2 className="text-2xl font-bold text-gray-900 mb-4">Order History</h2>
               <div className="flex items-center gap-4">
                 <Input
                   placeholder="Search orders..."
@@ -2029,39 +1736,25 @@ export function POSSystem() {
                   value={searchQuery}
                   onChange={(e) => setSearchQuery(e.target.value)}
                 />
-                <Badge variant="info">{apiOrders.length} orders</Badge>
+                <Badge variant="info">{orders.length} orders</Badge>
               </div>
             </div>
             <div className="flex-1 overflow-y-auto p-6">
-              {apiOrdersLoading && apiOrders.length === 0 ? (
-                <div className="text-center py-12">
-                  <p className="text-gray-500">Loading orders...</p>
-                </div>
-              ) : apiOrders.length === 0 ? (
+              {orders.length === 0 ? (
                 <div className="text-center py-12">
                   <ShoppingCart className="w-16 h-16 text-gray-300 mx-auto mb-4" />
                   <p className="text-gray-500 font-medium">No orders yet</p>
-                  <p className="text-sm text-gray-400 mt-2">Customer orders and POS payments appear here</p>
+                  <p className="text-sm text-gray-400 mt-2">Orders will appear here after payment</p>
                 </div>
               ) : (
                 <div className="space-y-4">
-                  {apiOrders.map((order) => (
+                  {orders.map((order) => (
                     <div key={order.id} className="bg-white border-2 border-gray-200 rounded-xl p-6 shadow-sm">
                       <div className="flex items-start justify-between mb-4">
                         <div>
                           <div className="flex items-center gap-3 mb-2">
-                            <h3 className="text-lg font-bold text-gray-900">Order #{order.id.slice(-8)}</h3>
-                            <Badge
-                              variant={
-                                order.status === 'pending'
-                                  ? 'warning'
-                                  : order.status === 'ready'
-                                    ? 'success'
-                                    : order.status === 'completed'
-                                      ? 'info'
-                                      : 'info'
-                              }
-                            >
+                            <h3 className="text-lg font-bold text-gray-900">Order #{order.orderNumber}</h3>
+                            <Badge variant={order.status === 'completed' ? 'success' : 'info'}>
                               {order.status}
                             </Badge>
                           </div>
@@ -2072,7 +1765,7 @@ export function POSSystem() {
                             <p className="text-sm text-gray-600">Table: {order.tableNumber}</p>
                           )}
                           <p className="text-sm text-gray-600">Customer: {order.customerName || 'Walk-in'}</p>
-                          <p className="text-sm text-gray-600">Payment: {order.paymentStatus?.toUpperCase() || 'N/A'}</p>
+                          <p className="text-sm text-gray-600">Payment: {order.paymentMethod?.toUpperCase() || 'N/A'}</p>
                         </div>
                         <div className="text-right">
                           <p className="text-2xl font-bold text-orange-600">A${order.total.toFixed(2)}</p>
@@ -2081,47 +1774,35 @@ export function POSSystem() {
                       </div>
                       <div className="border-t border-gray-200 pt-4">
                         <div className="space-y-2">
-                          {order.items.map((item, idx) => (
+                          {order.items.map((item: any, idx: number) => (
                             <div key={idx} className="flex justify-between text-sm">
                               <span className="text-gray-700">
                                 {item.quantity}x {item.name}
                               </span>
-                              <span className="text-gray-600">A${(item.price * item.quantity).toFixed(2)}</span>
+                              <span className="text-gray-600">A${(item.finalPrice * item.quantity).toFixed(2)}</span>
                             </div>
                           ))}
                         </div>
-                        <div className="mt-4 pt-4 border-t border-gray-200 flex gap-2">
-                          {order.status === 'pending' && (
-                            <>
-                              <Button
-                                variant="danger"
-                                size="sm"
-                                onClick={() => updateApiOrderStatus(order.id, 'rejected')}
-                              >
-                                <X className="w-4 h-4 mr-1" />
-                                Reject
-                              </Button>
-                              <Button
-                                variant="primary"
-                                size="sm"
-                                className="bg-green-600 hover:bg-green-700"
-                                onClick={() => updateApiOrderStatus(order.id, 'accepted')}
-                              >
-                                <Check className="w-4 h-4 mr-1" />
-                                Accept
-                              </Button>
-                            </>
+                        <div className="mt-4 pt-4 border-t border-gray-200 space-y-1">
+                          <div className="flex justify-between text-sm text-gray-600">
+                            <span>Subtotal (ex GST):</span>
+                            <span>A${order.subtotalExGst?.toFixed(2) || '0.00'}</span>
+                          </div>
+                          <div className="flex justify-between text-sm text-gray-600">
+                            <span>GST (10%):</span>
+                            <span>A${order.totalGst?.toFixed(2) || '0.00'}</span>
+                          </div>
+                          {order.discount && (
+                            <div className="flex justify-between text-sm text-green-600">
+                              <span>Discount:</span>
+                              <span>-A${(order.discount.value || 0).toFixed(2)}</span>
+                            </div>
                           )}
-                          {order.status === 'ready' && (
-                            <Button
-                              variant="primary"
-                              size="sm"
-                              className="bg-green-600 hover:bg-green-700"
-                              onClick={() => updateApiOrderStatus(order.id, 'completed')}
-                            >
-                              <Check className="w-4 h-4 mr-1" />
-                              Proceed to billing
-                            </Button>
+                          {order.tip > 0 && (
+                            <div className="flex justify-between text-sm text-gray-600">
+                              <span>Tip:</span>
+                              <span>A${order.tip.toFixed(2)}</span>
+                            </div>
                           )}
                         </div>
                       </div>
@@ -2614,182 +2295,6 @@ export function POSSystem() {
           </div>
         </DialogContent>
       </Dialog>
-
-      {/* Add/Edit Item Modal */}
-      {showItemModal && itemForm && (
-        <Dialog open={showItemModal} onOpenChange={(open) => { if (!open) { setShowItemModal(false); setEditingItem(null); setItemForm(null) } }}>
-          <DialogContent
-            title={editingItem ? 'Edit Item' : 'Add Item'}
-            onClose={() => { setShowItemModal(false); setEditingItem(null); setItemForm(null) }}
-            className="max-w-2xl max-h-[90vh] overflow-y-auto"
-          >
-            <div className="space-y-4">
-              <Input
-                label="Item name"
-                value={itemForm.name}
-                onChange={(e) => setItemForm({ ...itemForm, name: e.target.value })}
-                placeholder="e.g. Aussie Beef Burger"
-                required
-              />
-              <div>
-                <label className="block text-sm font-medium text-gray-700 mb-1">Description</label>
-                <textarea
-                  value={itemForm.description}
-                  onChange={(e) => setItemForm({ ...itemForm, description: e.target.value })}
-                  placeholder="Short description"
-                  className="w-full rounded-lg border border-gray-300 px-3 py-2 text-sm min-h-[80px]"
-                  rows={3}
-                />
-              </div>
-              <div className="grid grid-cols-2 gap-4">
-                <Input
-                  label="Base price (ex GST) A$"
-                  type="number"
-                  step="0.01"
-                  min="0"
-                  value={itemForm.basePrice === 0 ? '' : itemForm.basePrice}
-                  onChange={(e) => setItemForm({ ...itemForm, basePrice: parseFloat(e.target.value) || 0 })}
-                  placeholder="0.00"
-                />
-                <div>
-                  <label className="block text-sm font-medium text-gray-700 mb-1">Category</label>
-                  <select
-                    value={itemForm.categoryId}
-                    onChange={(e) => setItemForm({ ...itemForm, categoryId: e.target.value })}
-                    className="w-full rounded-lg border border-gray-300 px-3 py-2 text-sm"
-                  >
-                    {categories.map((cat) => (
-                      <option key={cat.id} value={cat.id}>{cat.name}</option>
-                    ))}
-                  </select>
-                </div>
-              </div>
-              <Input
-                label="Image URL"
-                value={itemForm.image}
-                onChange={(e) => setItemForm({ ...itemForm, image: e.target.value })}
-                placeholder="https://..."
-              />
-              <div className="flex gap-6">
-                <label className="flex items-center gap-2 cursor-pointer">
-                  <input
-                    type="checkbox"
-                    checked={itemForm.isAvailable}
-                    onChange={(e) => setItemForm({ ...itemForm, isAvailable: e.target.checked })}
-                    className="rounded border-gray-300"
-                  />
-                  <span className="text-sm font-medium text-gray-700">Available</span>
-                </label>
-                <label className="flex items-center gap-2 cursor-pointer">
-                  <input
-                    type="checkbox"
-                    checked={itemForm.popular}
-                    onChange={(e) => setItemForm({ ...itemForm, popular: e.target.checked })}
-                    className="rounded border-gray-300"
-                  />
-                  <span className="text-sm font-medium text-gray-700">Popular</span>
-                </label>
-              </div>
-
-              {/* Customization groups */}
-              <div className="border-t border-gray-200 pt-4">
-                <div className="flex items-center justify-between mb-3">
-                  <h4 className="font-semibold text-gray-900">Customization options</h4>
-                  <Button type="button" variant="secondary" size="sm" onClick={addCustomizationGroup}>
-                    <Plus className="w-4 h-4 mr-1" />
-                    Add group
-                  </Button>
-                </div>
-                {itemForm.customizations.length === 0 ? (
-                  <p className="text-sm text-gray-500">No customization groups. Add a group (e.g. Add Toppings, Remove Items) and then add options with names and prices.</p>
-                ) : (
-                  <div className="space-y-4">
-                    {itemForm.customizations.map((group, gIdx) => (
-                      <div key={group.id} className="bg-gray-50 rounded-xl p-4 border border-gray-200">
-                        <div className="flex items-center gap-2 mb-3">
-                          <Input
-                            value={group.name}
-                            onChange={(e) => updateCustomizationGroup(gIdx, { name: e.target.value })}
-                            placeholder="Group name (e.g. Add Toppings)"
-                            className="flex-1"
-                          />
-                          <select
-                            value={group.type}
-                            onChange={(e) => updateCustomizationGroup(gIdx, { type: e.target.value as 'add' | 'remove' | 'extra' })}
-                            className="rounded-lg border border-gray-300 px-3 py-2 text-sm w-32"
-                          >
-                            <option value="add">Add</option>
-                            <option value="remove">Remove</option>
-                            <option value="extra">Extra</option>
-                          </select>
-                          <Input
-                            type="number"
-                            min="0"
-                            placeholder="Max"
-                            value={group.maxSelections ?? ''}
-                            onChange={(e) => updateCustomizationGroup(gIdx, { maxSelections: e.target.value ? parseInt(e.target.value, 10) : undefined })}
-                            className="w-16"
-                            title="Max selections (optional)"
-                          />
-                          <button
-                            type="button"
-                            onClick={() => removeCustomizationGroup(gIdx)}
-                            className="p-2 text-red-600 hover:bg-red-50 rounded-lg"
-                            title="Remove group"
-                          >
-                            <X className="w-5 h-5" />
-                          </button>
-                        </div>
-                        <div className="space-y-2 ml-2">
-                          {group.options.map((opt, oIdx) => (
-                            <div key={opt.id} className="flex items-center gap-2">
-                              <Input
-                                value={opt.name}
-                                onChange={(e) => updateCustomizationOption(gIdx, oIdx, { name: e.target.value })}
-                                placeholder="Option name"
-                                className="flex-1"
-                              />
-                              <Input
-                                type="number"
-                                step="0.01"
-                                min="0"
-                                value={opt.price === 0 ? '' : opt.price}
-                                onChange={(e) => updateCustomizationOption(gIdx, oIdx, { price: parseFloat(e.target.value) || 0 })}
-                                placeholder="0"
-                                className="w-24"
-                              />
-                              <button
-                                type="button"
-                                onClick={() => removeCustomizationOption(gIdx, oIdx)}
-                                className="p-2 text-gray-500 hover:text-red-600 hover:bg-red-50 rounded-lg"
-                              >
-                                <X className="w-4 h-4" />
-                              </button>
-                            </div>
-                          ))}
-                          <Button type="button" variant="ghost" size="sm" onClick={() => addCustomizationOption(gIdx)}>
-                            <Plus className="w-4 h-4 mr-1" />
-                            Add option
-                          </Button>
-                        </div>
-                      </div>
-                    ))}
-                  </div>
-                )}
-              </div>
-
-              <div className="flex gap-2 pt-4 border-t border-gray-200">
-                <Button variant="secondary" onClick={() => { setShowItemModal(false); setEditingItem(null); setItemForm(null) }}>
-                  Cancel
-                </Button>
-                <Button variant="primary" onClick={handleSaveItem}>
-                  {editingItem ? 'Update item' : 'Add item'}
-                </Button>
-              </div>
-            </div>
-          </DialogContent>
-        </Dialog>
-      )}
 
       {/* Bottom Navigation Bar */}
       <div className="bg-white border-t-2 border-gray-200 px-6 py-3 flex-shrink-0">
