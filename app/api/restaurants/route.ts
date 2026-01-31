@@ -1,6 +1,6 @@
 import { randomUUID } from 'node:crypto'
 import { NextRequest, NextResponse } from 'next/server'
-import { supabase } from '@/lib/supabase'
+import { supabase, getServiceRoleClient } from '@/lib/supabase'
 
 /** Map Supabase restaurant row to frontend Restaurant type */
 function toRestaurant(row: {
@@ -66,8 +66,17 @@ export async function POST(request: NextRequest) {
       )
     }
 
+    // Use service role so System Dashboard can create restaurants (avoids RLS; required on Vercel)
+    const client = getServiceRoleClient() ?? supabase
+    if (!process.env.NEXT_PUBLIC_SUPABASE_URL) {
+      return NextResponse.json(
+        { error: 'Server misconfigured: NEXT_PUBLIC_SUPABASE_URL not set. Add it in Vercel → Project Settings → Environment Variables, then redeploy.' },
+        { status: 503 }
+      )
+    }
+
     const id = randomUUID()
-    const { data, error } = await supabase
+    const { data, error } = await client
       .from('restaurants')
       .insert({
         id,

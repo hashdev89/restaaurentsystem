@@ -164,20 +164,31 @@ export function SystemDashboard() {
     }
     setAddRestaurantSaving(true)
     try {
-      const res = await fetch('/api/restaurants', {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({
-          name: addRestaurantForm.name,
-          description: addRestaurantForm.description,
-          address: addRestaurantForm.address,
-          phone: addRestaurantForm.phone,
-          image: addRestaurantForm.image,
-          location: addRestaurantForm.location,
-        }),
-      })
-      const data = await res.json()
-      if (!res.ok) throw new Error(data.error || 'Failed to create restaurant')
+      let res: Response
+      try {
+        res = await fetch('/api/restaurants', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({
+            name: addRestaurantForm.name,
+            description: addRestaurantForm.description,
+            address: addRestaurantForm.address,
+            phone: addRestaurantForm.phone,
+            image: addRestaurantForm.image,
+            location: addRestaurantForm.location,
+          }),
+        })
+      } catch (fetchErr) {
+        const msg = fetchErr instanceof Error ? fetchErr.message : 'Network error'
+        if (msg.includes('fetch failed') || msg.includes('Failed to fetch') || msg.includes('NetworkError')) {
+          throw new Error(
+            'Cannot reach the server. If deployed on Vercel: add NEXT_PUBLIC_SUPABASE_URL, NEXT_PUBLIC_SUPABASE_ANON_KEY, and SUPABASE_SERVICE_ROLE_KEY in Project Settings → Environment Variables, then redeploy.'
+          )
+        }
+        throw fetchErr
+      }
+      const data = await res.json().catch(() => ({}))
+      if (!res.ok) throw new Error((data as { error?: string }).error || 'Failed to create restaurant')
       const restaurantId = data.restaurant?.id
       if (restaurantId && loginEmail.trim() && loginPassword && loginPassword.length >= 6) {
         const userRes = await fetch('/api/users', {
