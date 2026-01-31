@@ -171,9 +171,10 @@ export function NotificationProvider({ children }: { children: React.ReactNode }
   )
 
   useEffect(() => {
+    const timeouts = toastTimeouts.current
     return () => {
-      toastTimeouts.current.forEach((t) => clearTimeout(t))
-      toastTimeouts.current.clear()
+      timeouts.forEach((t) => clearTimeout(t))
+      timeouts.clear()
     }
   }, [])
 

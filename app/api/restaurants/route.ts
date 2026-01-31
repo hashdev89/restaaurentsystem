@@ -1,3 +1,4 @@
+import { randomUUID } from 'node:crypto'
 import { NextRequest, NextResponse } from 'next/server'
 import { supabase } from '@/lib/supabase'
 
@@ -65,9 +66,11 @@ export async function POST(request: NextRequest) {
       )
     }
 
+    const id = randomUUID()
     const { data, error } = await supabase
       .from('restaurants')
       .insert({
+        id,
         name: String(name).trim(),
         description: description ? String(description).trim() : null,
         address: String(address).trim(),

@@ -10,7 +10,6 @@ import {
   Info,
   Check,
   Trash2,
-  X,
 } from 'lucide-react'
 import { useNotification } from './providers/NotificationProvider'
 import { Button } from './ui/Button'
@@ -22,13 +21,6 @@ const icons: Record<NotificationType, React.ComponentType<{ className?: string }
   error: AlertCircle,
   warning: AlertTriangle,
   info: Info,
-}
-
-const dotColors: Record<NotificationType, string> = {
-  success: 'bg-emerald-500',
-  error: 'bg-red-500',
-  warning: 'bg-amber-500',
-  info: 'bg-sky-500',
 }
 
 function formatTime(ts: number) {
@@ -43,14 +35,17 @@ function formatTime(ts: number) {
 
 interface NotificationCenterProps {
   className?: string
-  /** Hide on POS full-screen */
-  hideOnPOS?: boolean
 }
 
-export function NotificationCenter({ className, hideOnPOS }: NotificationCenterProps) {
+export function NotificationCenter({ className }: NotificationCenterProps) {
   const { notifications, unreadCount, markAsRead, markAllAsRead, remove } = useNotification()
   const [open, setOpen] = useState(false)
+  const [mounted, setMounted] = useState(false)
   const panelRef = useRef<HTMLDivElement>(null)
+
+  useEffect(() => {
+    setMounted(true)
+  }, [])
 
   useEffect(() => {
     function handleClickOutside(e: MouseEvent) {
@@ -76,8 +71,8 @@ export function NotificationCenter({ className, hideOnPOS }: NotificationCenterP
         aria-expanded={open}
       >
         <Bell className="w-5 h-5" />
-        <span className={`absolute -top-0.5 -right-0.5 flex h-4 w-4 items-center justify-center rounded-full text-[10px] font-bold min-w-[1rem] ${unreadCount > 0 ? 'bg-orange-600 text-white' : 'bg-transparent text-transparent pointer-events-none'}`}>
-          {unreadCount > 99 ? '99+' : unreadCount}
+        <span className={`absolute -top-0.5 -right-0.5 flex h-4 w-4 items-center justify-center rounded-full text-[10px] font-bold min-w-[1rem] ${mounted && unreadCount > 0 ? 'bg-orange-600 text-white' : 'bg-transparent text-transparent pointer-events-none'}`}>
+          {mounted ? (unreadCount > 99 ? '99+' : unreadCount) : 0}
         </span>
       </button>
 
@@ -132,7 +127,6 @@ function NotificationItem({
   onClosePanel: () => void
 }) {
   const Icon = icons[notification.type]
-  const dot = dotColors[notification.type]
   const isUnread = !notification.read
 
   const content = (

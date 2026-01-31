@@ -1,5 +1,5 @@
 import { NextRequest, NextResponse } from 'next/server'
-import { supabase } from '@/lib/supabase'
+import { supabase, getServiceRoleClient } from '@/lib/supabase'
 
 function toRestaurant(row: {
   id: string
@@ -62,6 +62,65 @@ export async function PATCH(
   } catch (err: unknown) {
     console.error('PATCH restaurant error:', err)
     const message = err instanceof Error ? err.message : 'Failed to update restaurant'
+    return NextResponse.json({ error: message }, { status: 500 })
+  }
+}
+
+export async function DELETE(
+  _request: NextRequest,
+  { params }: { params: Promise<{ id: string }> }
+) {
+  try {
+    const { id } = await params
+
+    // Use service role client if available (bypasses RLS); otherwise anon (may fail if RLS blocks)
+    const client = getServiceRoleClient() ?? supabase
+
+    // Unlink users that belong to this restaurant (users.restaurant_id has no ON DELETE)
+    const { error: usersError } = await client
+      .from('users')
+      .update({ restaurant_id: null })
+      .eq('restaurant_id', id)
+
+    if (usersError) {
+      console.error('DELETE restaurant: unlink users error', usersError)
+      const msg = usersError.message || 'Could not unlink users from restaurant.'
+      return NextResponse.json({ error: msg }, { status: 500 })
+    }
+
+    // Delete orders for this restaurant first (cascade deletes order_items).
+    // Then we can delete the restaurant (cascade deletes menu_items) without violating order_items.menu_item_id fkey.
+    const { error: ordersError } = await client
+      .from('orders')
+      .delete()
+      .eq('restaurant_id', id)
+
+    if (ordersError) {
+      console.error('DELETE restaurant: delete orders error', ordersError)
+      const msg = ordersError.message || 'Could not delete restaurant orders.'
+      return NextResponse.json({ error: msg }, { status: 500 })
+    }
+
+    const { error } = await client
+      .from('restaurants')
+      .delete()
+      .eq('id', id)
+
+    if (error) {
+      console.error('DELETE restaurant error', error)
+      const msg = error.message || 'Could not delete restaurant.'
+      return NextResponse.json({ error: msg }, { status: 500 })
+    }
+
+    return NextResponse.json({ ok: true })
+  } catch (err: unknown) {
+    console.error('DELETE restaurant error:', err)
+    const message =
+      err instanceof Error
+        ? err.message
+        : typeof err === 'object' && err !== null && 'message' in err
+          ? String((err as { message: unknown }).message)
+          : 'Failed to delete restaurant'
     return NextResponse.json({ error: message }, { status: 500 })
   }
 }

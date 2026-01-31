@@ -8,22 +8,33 @@ import { Button } from '../ui/Button'
 import { Input } from '../ui/Input'
 import { Card } from '../ui/Card'
 import { Badge } from '../ui/Badge'
-import { Table, SeatBooking as SeatBookingType, Restaurant } from '@/types'
-import { MOCK_RESTAURANTS } from './RestaurantList'
+import { Table, Restaurant } from '@/types'
 
-// Mock tables data
-const MOCK_TABLES: Table[] = [
-  { id: 't1', restaurantId: 'rest_1', tableNumber: '1', capacity: 2, status: 'available', location: 'Window' },
-  { id: 't2', restaurantId: 'rest_1', tableNumber: '2', capacity: 4, status: 'available', location: 'Indoor' },
-  { id: 't3', restaurantId: 'rest_1', tableNumber: '3', capacity: 2, status: 'reserved', location: 'Outdoor' },
-  { id: 't4', restaurantId: 'rest_1', tableNumber: '4', capacity: 6, status: 'available', location: 'Indoor' },
-  { id: 't5', restaurantId: 'rest_1', tableNumber: '5', capacity: 4, status: 'occupied', location: 'Window' },
-  { id: 't6', restaurantId: 'rest_1', tableNumber: '6', capacity: 2, status: 'available', location: 'Outdoor' },
-  { id: 't7', restaurantId: 'rest_1', tableNumber: '7', capacity: 8, status: 'available', location: 'Indoor' },
-  { id: 't8', restaurantId: 'rest_1', tableNumber: '8', capacity: 4, status: 'available', location: 'Window' },
-  { id: 't9', restaurantId: 'rest_1', tableNumber: '9', capacity: 2, status: 'reserved', location: 'Indoor' },
-  { id: 't10', restaurantId: 'rest_1', tableNumber: '10', capacity: 4, status: 'available', location: 'Outdoor' },
-]
+function mapApiRestaurant(row: { id: string; name: string; description: string | null; address: string; phone: string; image: string | null; location: string | null; is_active: boolean; rating: number; review_count: number }): Restaurant {
+  return {
+    id: row.id,
+    name: row.name,
+    description: row.description ?? '',
+    address: row.address,
+    phone: row.phone,
+    image: row.image ?? '',
+    isActive: row.is_active,
+    rating: Number(row.rating),
+    reviewCount: Number(row.review_count),
+    location: row.location ?? '',
+  }
+}
+
+function mapApiTable(row: { id: string; restaurant_id: string; table_number: string; capacity: number; status: string; location: string | null }): Table {
+  return {
+    id: row.id,
+    restaurantId: row.restaurant_id,
+    tableNumber: row.table_number,
+    capacity: row.capacity,
+    status: row.status as Table['status'],
+    location: row.location ?? undefined,
+  }
+}
 
 // Generate time slots
 const generateTimeSlots = () => {
@@ -61,18 +72,32 @@ export function SeatBooking() {
   })
 
   useEffect(() => {
-    const foundRestaurant = MOCK_RESTAURANTS.find((r) => r.id === restaurantId)
-    if (foundRestaurant) {
-      setRestaurant(foundRestaurant)
+    if (!restaurantId) return
+    let cancelled = false
+    async function load() {
+      try {
+        const [resRes, resTables] = await Promise.all([
+          fetch('/api/restaurants'),
+          fetch(`/api/tables?restaurantId=${encodeURIComponent(restaurantId)}`),
+        ])
+        if (cancelled) return
+        if (resRes.ok) {
+          const data = await resRes.json()
+          const found = (data.restaurants ?? []).find((r: { id: string }) => r.id === restaurantId)
+          if (found) setRestaurant(mapApiRestaurant(found))
+        }
+        if (resTables.ok) {
+          const data = await resTables.json()
+          setTables((data.tables ?? []).map(mapApiTable))
+        }
+      } catch {
+        if (!cancelled) setTables([])
+      }
     }
-
-    // Load tables for this restaurant
-    const restaurantTables = MOCK_TABLES.filter((t) => t.restaurantId === restaurantId)
-    setTables(restaurantTables)
-
-    // Set default date to today
+    load()
     const today = new Date()
     setSelectedDate(today.toISOString().split('T')[0])
+    return () => { cancelled = true }
   }, [restaurantId])
 
   const availableTables = tables.filter((table) => table.status === 'available')

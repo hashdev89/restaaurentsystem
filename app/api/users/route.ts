@@ -1,5 +1,6 @@
 import { NextRequest, NextResponse } from 'next/server'
-import { supabase } from '@/lib/supabase'
+import { supabase, getServiceRoleClient } from '@/lib/supabase'
+import { hashPassword } from '@/lib/auth'
 
 function toUser(row: { id: string; email: string; name: string | null; role: string; restaurant_id: string | null; created_at: string }) {
   return {
@@ -12,12 +13,21 @@ function toUser(row: { id: string; email: string; name: string | null; role: str
   }
 }
 
-export async function GET() {
+export async function GET(request: NextRequest) {
   try {
-    const { data, error } = await supabase
+    const { searchParams } = new URL(request.url)
+    const restaurantId = searchParams.get('restaurantId')
+
+    let query = supabase
       .from('users')
       .select('*')
       .order('created_at', { ascending: false })
+
+    if (restaurantId?.trim()) {
+      query = query.eq('restaurant_id', restaurantId.trim())
+    }
+
+    const { data, error } = await query
 
     if (error) throw error
 
@@ -33,7 +43,7 @@ export async function GET() {
 export async function POST(request: NextRequest) {
   try {
     const body = await request.json()
-    const { email, name, role, restaurantId } = body
+    const { email, name, role, restaurantId, password } = body
 
     if (!email || typeof email !== 'string' || !email.trim()) {
       return NextResponse.json({ error: 'email is required' }, { status: 400 })
@@ -45,8 +55,12 @@ export async function POST(request: NextRequest) {
       role: role && ['customer', 'restaurant', 'admin'].includes(role) ? role : 'customer',
     }
     if (restaurantId) insert.restaurant_id = restaurantId
+    if (password && typeof password === 'string' && password.length >= 6) {
+      insert.password_hash = hashPassword(password)
+    }
 
-    const { data, error } = await supabase
+    const client = getServiceRoleClient() ?? supabase
+    const { data, error } = await client
       .from('users')
       .insert(insert)
       .select()

@@ -30,19 +30,19 @@ export function Cart() {
   }
 
   return (
-    <div className="min-h-screen bg-gray-50 py-8 px-4 sm:px-6 lg:px-8">
-      <div className="max-w-3xl mx-auto">
+    <div className="min-h-screen w-full bg-gray-50 flex flex-col">
+      <div className="flex-1 w-full max-w-6xl mx-auto py-6 px-4 sm:px-6 lg:px-8 lg:min-h-[calc(100vh-4rem)]">
         <div className="flex items-center mb-6">
-          <Link href="/" className="text-gray-500 hover:text-gray-700 mr-4">
+          <Link href="/" className="text-gray-500 hover:text-gray-700 mr-4 flex-shrink-0">
             <ArrowLeft className="w-6 h-6" />
           </Link>
           <h1 className="text-2xl font-bold text-gray-900">Your Order</h1>
         </div>
 
-        <div className="grid grid-cols-1 lg:grid-cols-3 gap-8">
+        <div className="grid grid-cols-1 lg:grid-cols-3 gap-8 w-full">
           {/* Cart Items List */}
-          <div className="lg:col-span-2">
-            <Card className="mb-6">
+          <div className="lg:col-span-2 min-w-0">
+            <Card className="mb-6 lg:mb-0">
               <div className="divide-y divide-gray-100">
                 {items.map((item) => (
                   <CartItem key={item.id} item={item} />
@@ -52,26 +52,34 @@ export function Cart() {
           </div>
 
           {/* Order Summary */}
-          <div className="lg:col-span-1">
-            <Card className="sticky top-8">
+          <div className="lg:col-span-1 min-w-0">
+            <Card className="lg:sticky lg:top-24">
               <h2 className="text-lg font-semibold text-gray-900 mb-4">Order Summary</h2>
 
               <div className="space-y-3 mb-6">
                 <div className="flex justify-between text-gray-600">
                   <span>Subtotal ({itemCount} items)</span>
-                  <span>${total.toFixed(2)}</span>
+                  <span>A${total.toFixed(2)}</span>
                 </div>
                 <div className="flex justify-between text-gray-600">
                   <span>Tax (10% GST)</span>
-                  <span>${(total * 0.1).toFixed(2)}</span>
+                  <span>A${(total * 0.1).toFixed(2)}</span>
+                </div>
+                <div className="flex justify-between text-gray-600">
+                  <span>Service fee (1%)</span>
+                  <span>A${(total * 0.01).toFixed(2)}</span>
                 </div>
                 <div className="border-t border-gray-200 pt-3 flex justify-between font-bold text-lg text-gray-900">
                   <span>Total</span>
-                  <span>${(total * 1.1).toFixed(2)}</span>
+                  <span>A${(total * 1.11).toFixed(2)}</span>
                 </div>
               </div>
 
-              <Button className="w-full" size="lg" onClick={() => router.push('/checkout')}>
+              <Button
+                className="w-full min-h-[48px] sm:min-h-[56px] text-base sm:text-lg py-3 sm:py-4"
+                size="lg"
+                onClick={() => router.push('/checkout')}
+              >
                 Proceed to Checkout
               </Button>
             </Card>

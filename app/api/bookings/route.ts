@@ -50,12 +50,10 @@ export async function POST(request: NextRequest) {
     }
 
     return NextResponse.json({ bookingId: booking.id, booking }, { status: 201 })
-  } catch (error: any) {
+  } catch (error: unknown) {
     console.error('Booking creation error:', error)
-    return NextResponse.json(
-      { error: error.message || 'Failed to create booking' },
-      { status: 500 }
-    )
+    const message = error instanceof Error ? error.message : 'Failed to create booking'
+    return NextResponse.json({ error: message }, { status: 500 })
   }
 }
 
@@ -90,12 +88,10 @@ export async function GET(request: NextRequest) {
     }
 
     return NextResponse.json({ bookings: data })
-  } catch (error: any) {
+  } catch (error: unknown) {
     console.error('Get bookings error:', error)
-    return NextResponse.json(
-      { error: error.message || 'Failed to fetch bookings' },
-      { status: 500 }
-    )
+    const message = error instanceof Error ? error.message : 'Failed to fetch bookings'
+    return NextResponse.json({ error: message }, { status: 500 })
   }
 }
 

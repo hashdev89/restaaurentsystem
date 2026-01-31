@@ -12,47 +12,41 @@ import { MenuItemForm } from '../MenuItemForm'
 import { normalizeOrders, type SupabaseOrderRow } from '@/lib/orders'
 import { useNotification } from '../providers/NotificationProvider'
 
-// Mock Menu Data for this restaurant
-const MOCK_MENU_ITEMS: MenuItem[] = [
-  {
-    id: '1',
-    restaurantId: 'rest_1',
-    name: 'Aussie Beef Pie',
-    description: 'Traditional Australian meat pie with premium beef, gravy, and flaky pastry.',
-    price: 12.99,
-    category: 'Mains',
-    image: 'https://images.unsplash.com/photo-1568901346375-23c9450c58cd?w=800&q=80',
-    isAvailable: true
-  },
-  {
-    id: '2',
-    restaurantId: 'rest_1',
-    name: 'Fish & Chips',
-    description: 'Beer-battered barramundi with hand-cut chips, lemon, and tartar sauce.',
-    price: 18.5,
-    category: 'Mains',
-    image: 'https://images.unsplash.com/photo-1546069901-ba9599a7e63c?w=800&q=80',
-    isAvailable: true
-  },
-  {
-    id: '3',
-    restaurantId: 'rest_1',
-    name: 'Aussie Burger',
-    description: 'Beef patty, beetroot, egg, bacon, cheese, lettuce, tomato, and onion.',
-    price: 16.99,
-    category: 'Mains',
-    image: 'https://images.unsplash.com/photo-1568901346375-23c9450c58cd?w=800&q=80',
-    isAvailable: true
-  }
-]
-
-const CURRENT_RESTAURANT_ID = 'rest_1'
 const ORDERS_POLL_MS = 8000
 
-export function RestaurantDashboard() {
+function getDefaultRestaurantId(): string {
+  if (typeof process === 'undefined' || !process.env) return ''
+  return process.env.NEXT_PUBLIC_DEFAULT_RESTAURANT_ID || ''
+}
+
+export function RestaurantDashboard({ restaurantId: restaurantIdProp }: { restaurantId?: string } = {}) {
+  const envOrPropId = restaurantIdProp ?? getDefaultRestaurantId()
+  const [resolvedFirstRestaurantId, setResolvedFirstRestaurantId] = useState<string>('')
+  const [loadingFirstRestaurant, setLoadingFirstRestaurant] = useState(!envOrPropId)
+  const currentRestaurantId = envOrPropId || resolvedFirstRestaurantId
   const { success, error, info } = useNotification()
   const [orders, setOrders] = useState<Order[]>([])
-  const [menuItems, setMenuItems] = useState<MenuItem[]>(MOCK_MENU_ITEMS)
+
+  // When no restaurant in URL/env, use first restaurant from API
+  useEffect(() => {
+    if (envOrPropId) {
+      setLoadingFirstRestaurant(false)
+      return
+    }
+    let cancelled = false
+    fetch('/api/restaurants')
+      .then((res) => (res.ok ? res.json() : null))
+      .then((data) => {
+        if (cancelled) return
+        const id = data?.restaurants?.[0]?.id
+        if (id) setResolvedFirstRestaurantId(id)
+      })
+      .finally(() => {
+        if (!cancelled) setLoadingFirstRestaurant(false)
+      })
+    return () => { cancelled = true }
+  }, [envOrPropId])
+  const [menuItems, setMenuItems] = useState<MenuItem[]>([])
   const [activeTab, setActiveTab] = useState<'pending' | 'ready' | 'history' | 'menu' | 'tables' | 'stock'>('pending')
   const [isModalOpen, setIsModalOpen] = useState(false)
   const [editingItem, setEditingItem] = useState<Partial<MenuItem> | null>(null)
@@ -61,6 +55,7 @@ export function RestaurantDashboard() {
   const [inventory, setInventory] = useState<{ id: string; barcode: string; name: string; quantity: number; price: number }[]>([])
   const [tablesLoading, setTablesLoading] = useState(false)
   const [inventoryLoading, setInventoryLoading] = useState(false)
+  const [menuItemsLoading, setMenuItemsLoading] = useState(false)
   const [newTableNumber, setNewTableNumber] = useState('')
   const [newTableCapacity, setNewTableCapacity] = useState(4)
   const [newStockBarcode, setNewStockBarcode] = useState('')
@@ -70,7 +65,7 @@ export function RestaurantDashboard() {
 
   const fetchOrders = useCallback(async () => {
     try {
-      const res = await fetch(`/api/orders?restaurantId=${CURRENT_RESTAURANT_ID}`)
+      const res = await fetch(`/api/orders?restaurantId=${currentRestaurantId}`)
       if (!res.ok) return
       const data = await res.json()
       const list = (data.orders || []) as SupabaseOrderRow[]
@@ -80,7 +75,7 @@ export function RestaurantDashboard() {
     } finally {
       setOrdersLoading(false)
     }
-  }, [])
+  }, [currentRestaurantId])
 
   useEffect(() => {
     fetchOrders()
@@ -127,9 +122,10 @@ export function RestaurantDashboard() {
   }
 
   const fetchTables = useCallback(async () => {
+    if (!currentRestaurantId) return
     setTablesLoading(true)
     try {
-      const res = await fetch(`/api/tables?restaurantId=${CURRENT_RESTAURANT_ID}`)
+      const res = await fetch(`/api/tables?restaurantId=${currentRestaurantId}`)
       if (!res.ok) return
       const data = await res.json()
       setTables(data.tables ?? [])
@@ -138,12 +134,13 @@ export function RestaurantDashboard() {
     } finally {
       setTablesLoading(false)
     }
-  }, [])
+  }, [currentRestaurantId])
 
   const fetchInventory = useCallback(async () => {
+    if (!currentRestaurantId) return
     setInventoryLoading(true)
     try {
-      const res = await fetch(`/api/inventory?restaurantId=${CURRENT_RESTAURANT_ID}`)
+      const res = await fetch(`/api/inventory?restaurantId=${currentRestaurantId}`)
       if (!res.ok) return
       const data = await res.json()
       setInventory(data.items ?? [])
@@ -152,7 +149,32 @@ export function RestaurantDashboard() {
     } finally {
       setInventoryLoading(false)
     }
-  }, [])
+  }, [currentRestaurantId])
+
+  const fetchMenuItems = useCallback(async () => {
+    if (!currentRestaurantId) return
+    setMenuItemsLoading(true)
+    try {
+      const res = await fetch(`/api/menu-items?restaurantId=${encodeURIComponent(currentRestaurantId)}`)
+      if (!res.ok) return
+      const data = await res.json()
+      const list = (data.items ?? []).map((row: { id: string; restaurant_id: string; name: string; description: string | null; price: number; category: string | null; image: string | null; is_available: boolean }) => ({
+        id: row.id,
+        restaurantId: row.restaurant_id,
+        name: row.name,
+        description: row.description ?? '',
+        price: Number(row.price),
+        category: row.category ?? '',
+        image: row.image ?? '',
+        isAvailable: row.is_available ?? true
+      }))
+      setMenuItems(list)
+    } catch (e) {
+      console.error('Fetch menu items error:', e)
+    } finally {
+      setMenuItemsLoading(false)
+    }
+  }, [currentRestaurantId])
 
   useEffect(() => {
     if (activeTab === 'tables') fetchTables()
@@ -162,6 +184,10 @@ export function RestaurantDashboard() {
     if (activeTab === 'stock') fetchInventory()
   }, [activeTab, fetchInventory])
 
+  useEffect(() => {
+    if (activeTab === 'menu') fetchMenuItems()
+  }, [activeTab, fetchMenuItems])
+
   const handleAddTable = async (e: React.FormEvent) => {
     e.preventDefault()
     if (!newTableNumber.trim()) return
@@ -170,7 +196,7 @@ export function RestaurantDashboard() {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({
-          restaurantId: CURRENT_RESTAURANT_ID,
+          restaurantId: currentRestaurantId,
           tableNumber: newTableNumber.trim(),
           capacity: newTableCapacity
         })
@@ -193,7 +219,7 @@ export function RestaurantDashboard() {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({
-          restaurantId: CURRENT_RESTAURANT_ID,
+          restaurantId: currentRestaurantId,
           barcode: newStockBarcode.trim(),
           name: newStockName.trim(),
           quantity: newStockQty,
@@ -230,7 +256,7 @@ export function RestaurantDashboard() {
   const getTableQrUrl = (tableNumber: string) => {
     if (typeof window === 'undefined') return ''
     const base = window.location.origin
-    const url = `${base}/restaurant/${CURRENT_RESTAURANT_ID}?table=${encodeURIComponent(tableNumber)}`
+    const url = `${base}/restaurant/${currentRestaurantId}?table=${encodeURIComponent(tableNumber)}`
     return `https://api.qrserver.com/v1/create-qr-code/?size=200x200&data=${encodeURIComponent(url)}`
   }
 
@@ -281,26 +307,67 @@ export function RestaurantDashboard() {
     setIsModalOpen(true)
   }
 
-  const handleDeleteMenuItem = (id: string) => {
-    if (window.confirm('Are you sure you want to delete this item?')) {
+  const handleDeleteMenuItem = async (id: string) => {
+    if (!window.confirm('Are you sure you want to delete this item?')) return
+    try {
+      const res = await fetch(`/api/menu-items/${id}`, { method: 'DELETE' })
+      if (!res.ok) {
+        const data = await res.json().catch(() => ({}))
+        throw new Error(data.error || 'Delete failed')
+      }
       setMenuItems((prev) => prev.filter((i) => i.id !== id))
+      success('Item deleted', 'Menu item removed.')
+    } catch (e) {
+      error('Could not delete', e instanceof Error ? e.message : 'Failed to delete menu item')
     }
   }
 
-  const handleMenuItemSubmit = (data: Partial<MenuItem>) => {
-    if (editingItem) {
-      setMenuItems((prev) =>
-        prev.map((i) => (i.id === editingItem.id ? { ...i, ...data } as MenuItem : i))
-      )
-    } else {
-      const newItem: MenuItem = {
-        ...(data as MenuItem),
-        id: Math.random().toString(36).substr(2, 9),
-        restaurantId: CURRENT_RESTAURANT_ID
+  const handleMenuItemSubmit = async (data: Partial<MenuItem>) => {
+    try {
+      if (editingItem) {
+        const res = await fetch(`/api/menu-items/${editingItem.id}`, {
+          method: 'PATCH',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({
+            name: data.name,
+            description: data.description,
+            price: data.price,
+            category: data.category,
+            image: data.image,
+            isAvailable: data.isAvailable
+          })
+        })
+        if (!res.ok) {
+          const err = await res.json().catch(() => ({}))
+          throw new Error(err.error || 'Update failed')
+        }
+        success('Item updated', 'Menu item saved.')
+      } else {
+        const res = await fetch('/api/menu-items', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({
+            restaurantId: currentRestaurantId,
+            name: data.name,
+            description: data.description ?? '',
+            price: data.price,
+            category: data.category ?? 'Other',
+            image: data.image ?? '',
+            isAvailable: data.isAvailable !== false
+          })
+        })
+        if (!res.ok) {
+          const err = await res.json().catch(() => ({}))
+          throw new Error(err.error || 'Create failed')
+        }
+        success('Item added', 'Menu item saved and will show under this restaurant.')
       }
-      setMenuItems((prev) => [...prev, newItem])
+      setIsModalOpen(false)
+      setEditingItem(null)
+      await fetchMenuItems()
+    } catch (e) {
+      error('Could not save', e instanceof Error ? e.message : 'Failed to save menu item')
     }
-    setIsModalOpen(false)
   }
 
   const pendingOrders = orders.filter((o) => o.status === 'pending')
@@ -308,6 +375,31 @@ export function RestaurantDashboard() {
   const historyOrders = orders
     .filter((o) => o.status !== 'pending' && o.status !== 'ready')
     .sort((a, b) => new Date(b.createdAt).getTime() - new Date(a.createdAt).getTime())
+
+  if (!currentRestaurantId) {
+    return (
+      <div className="min-h-screen bg-gray-100 flex items-center justify-center p-4">
+        <Card className="max-w-md w-full p-6 text-center">
+          {loadingFirstRestaurant ? (
+            <>
+              <p className="text-gray-600">Loading restaurant…</p>
+            </>
+          ) : (
+            <>
+              <h2 className="text-lg font-semibold text-gray-900 mb-2">No restaurant selected</h2>
+              <p className="text-gray-600 text-sm mb-4">
+                Add a restaurant in the System Dashboard first, then open its dashboard from there. Or set{' '}
+                <code className="bg-gray-200 px-1 rounded text-xs">NEXT_PUBLIC_DEFAULT_RESTAURANT_ID</code> in .env.
+              </p>
+              <Link href="/system/dashboard">
+                <Button variant="primary">Go to System Dashboard</Button>
+              </Link>
+            </>
+          )}
+        </Card>
+      </div>
+    )
+  }
 
   return (
     <div className="min-h-screen bg-gray-100">
@@ -330,12 +422,17 @@ export function RestaurantDashboard() {
                   Kitchen View
                 </Button>
               </Link>
-              <Link href="/restaurant/login">
-                <Button variant="ghost" size="sm">
-                  <LogOut className="w-4 h-4 mr-2" />
-                  Sign Out
-                </Button>
-              </Link>
+              <Button
+                variant="ghost"
+                size="sm"
+                onClick={async () => {
+                  await fetch('/api/auth/logout', { method: 'POST' })
+                  window.location.href = '/login'
+                }}
+              >
+                <LogOut className="w-4 h-4 mr-2" />
+                Sign Out
+              </Button>
             </div>
           </div>
         </div>
@@ -575,7 +672,13 @@ export function RestaurantDashboard() {
                     </tr>
                   </thead>
                   <tbody className="bg-white divide-y divide-gray-200">
-                    {menuItems.length > 0 ? (
+                    {menuItemsLoading ? (
+                      <tr>
+                        <td colSpan={5} className="px-6 py-8 text-center text-gray-500">
+                          Loading menu items…
+                        </td>
+                      </tr>
+                    ) : menuItems.length > 0 ? (
                       menuItems.map((item) => (
                         <tr key={item.id}>
                           <td className="px-6 py-4 whitespace-nowrap">

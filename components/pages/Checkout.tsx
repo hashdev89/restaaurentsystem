@@ -12,6 +12,37 @@ import { Card } from '../ui/Card'
 import { Select } from '../ui/Select'
 import { OrderType } from '@/types'
 
+const CUSTOMER_PROFILE_KEY = 'restaurant-customer-profile'
+
+function loadCustomerProfile(): { name: string; email: string; phone: string } {
+  if (typeof window === 'undefined') return { name: '', email: '', phone: '' }
+  try {
+    const raw = localStorage.getItem(CUSTOMER_PROFILE_KEY)
+    if (!raw) return { name: '', email: '', phone: '' }
+    const p = JSON.parse(raw) as { name?: string; email?: string; phone?: string }
+    return {
+      name: typeof p.name === 'string' ? p.name : '',
+      email: typeof p.email === 'string' ? p.email : '',
+      phone: typeof p.phone === 'string' ? p.phone : ''
+    }
+  } catch {
+    return { name: '', email: '', phone: '' }
+  }
+}
+
+function saveCustomerProfile(profile: { name: string; email: string; phone: string }) {
+  if (typeof window === 'undefined') return
+  try {
+    localStorage.setItem(CUSTOMER_PROFILE_KEY, JSON.stringify({
+      name: profile.name.trim(),
+      email: profile.email.trim(),
+      phone: profile.phone.trim()
+    }))
+  } catch {
+    // ignore
+  }
+}
+
 export function Checkout() {
   const { items, total, clearCart, tableNumber: cartTable } = useCart()
   const { success, error } = useNotification()
@@ -24,7 +55,7 @@ export function Checkout() {
     if (cartTable) setTableNumber(cartTable)
   }, [cartTable])
 
-  // Form State
+  // Form State – pre-fill name, email, phone from cached customer profile (client-only)
   const [formData, setFormData] = useState({
     name: '',
     email: '',
@@ -34,6 +65,18 @@ export function Checkout() {
     cvc: ''
   })
 
+  useEffect(() => {
+    const profile = loadCustomerProfile()
+    if (profile.name || profile.email || profile.phone) {
+      setFormData((prev) => ({
+        ...prev,
+        name: profile.name,
+        email: profile.email,
+        phone: profile.phone
+      }))
+    }
+  }, [])
+
   const handleInputChange = (e: React.ChangeEvent<HTMLInputElement>) => {
     const { name, value } = e.target
     setFormData((prev) => ({
@@ -42,7 +85,11 @@ export function Checkout() {
     }))
   }
 
-  const finalTotal = total * 1.1 // Include GST
+  const subtotal = total
+  const gstAmount = total * 0.1
+  const serviceFeeRate = 0.01
+  const serviceFeeAmount = total * serviceFeeRate
+  const finalTotal = total + gstAmount + serviceFeeAmount // Subtotal + GST (10%) + Service fee (1%)
 
   const createOrderInSupabase = async (opts: { paymentStatus: string; squarePaymentId?: string }) => {
     const orderResponse = await fetch('/api/orders', {
@@ -74,7 +121,7 @@ export function Checkout() {
     return orderResponse.json()
   }
 
-  const handlePlaceOrderPayAtTable = async (e: React.FormEvent) => {
+  const handlePlaceOrderPayLater = async (e: React.FormEvent, payAtLabel: string) => {
     e.preventDefault()
     if (!formData.name.trim() || !formData.email.trim() || !formData.phone.trim()) {
       error('Missing details', 'Please enter name, email and phone.')
@@ -84,7 +131,7 @@ export function Checkout() {
     try {
       const orderData = await createOrderInSupabase({ paymentStatus: 'pending' })
       clearCart()
-      success('Order placed', `Order sent to the restaurant. You can pay at the table.`, {
+      success('Order placed', `Order sent to the restaurant. ${payAtLabel}`, {
         actionHref: `/confirmation?orderId=${orderData.orderId}&orderType=${orderType}`,
         actionLabel: 'View confirmation'
       })
@@ -99,6 +146,10 @@ export function Checkout() {
 
   const handleSubmit = async (e: React.FormEvent) => {
     e.preventDefault()
+    if (!formData.name.trim() || !formData.email.trim() || !formData.phone.trim()) {
+      error('Missing details', 'Please enter your name, email and phone number.')
+      return
+    }
     setIsProcessing(true)
 
     try {
@@ -123,6 +174,7 @@ export function Checkout() {
         squarePaymentId: paymentData.paymentId
       })
 
+      saveCustomerProfile({ name: formData.name, email: formData.email, phone: formData.phone })
       clearCart()
       success('Order placed', `Order #${orderData.orderId} confirmed. Redirecting…`, {
         actionHref: `/confirmation?orderId=${orderData.orderId}&orderType=${orderType}`,
@@ -139,17 +191,17 @@ export function Checkout() {
   }
 
   return (
-    <div className="min-h-screen bg-gray-50 py-8 px-4 sm:px-6 lg:px-8">
-      <div className="max-w-2xl mx-auto">
+    <div className="min-h-screen w-full bg-gray-50 flex flex-col">
+      <div className="flex-1 w-full max-w-6xl mx-auto py-6 px-4 sm:px-6 lg:px-8 lg:py-8 lg:min-h-[calc(100vh-4rem)]">
         <div className="flex items-center mb-6">
-          <Link href="/cart" className="text-gray-500 hover:text-gray-700 mr-4">
+          <Link href="/cart" className="text-gray-500 hover:text-gray-700 mr-4 flex-shrink-0">
             <ArrowLeft className="w-6 h-6" />
           </Link>
           <h1 className="text-2xl font-bold text-gray-900">Checkout</h1>
         </div>
 
-        <form onSubmit={handleSubmit}>
-          <div className="space-y-6">
+        <form onSubmit={handleSubmit} className="flex flex-col lg:flex-row lg:gap-10 lg:items-start w-full">
+          <div className="flex-1 min-w-0 space-y-6">
             {/* Order Type Selection */}
             <Card
               header={<h2 className="text-lg font-semibold">Order Type</h2>}
@@ -262,34 +314,67 @@ export function Checkout() {
                 <span className="text-sm">Powered by Square</span>
               </div>
             </Card>
+          </div>
 
-            {/* Total and Submit */}
-            <div className="flex flex-col gap-4">
-              <div className="flex justify-between items-center text-lg font-bold text-gray-900 px-2">
-                <span>Total (GST included)</span>
-                <span>${finalTotal.toFixed(2)}</span>
+          {/* Order Summary - sticky on desktop, full width */}
+          <div className="w-full lg:w-[380px] lg:flex-shrink-0 mt-8 lg:mt-0">
+            <Card className="lg:sticky lg:top-8">
+              <h2 className="text-lg font-semibold text-gray-900 mb-4">Order Summary</h2>
+              <div className="space-y-2 mb-4">
+                <div className="flex justify-between text-gray-600 text-sm">
+                  <span>Subtotal ({items.length} items)</span>
+                  <span>A${subtotal.toFixed(2)}</span>
+                </div>
+                <div className="flex justify-between text-gray-600 text-sm">
+                  <span>GST (10%)</span>
+                  <span>A${gstAmount.toFixed(2)}</span>
+                </div>
+                <div className="flex justify-between text-gray-600 text-sm">
+                  <span>Service fee (1%)</span>
+                  <span>A${serviceFeeAmount.toFixed(2)}</span>
+                </div>
               </div>
-              {orderType === 'dine-in' && (
+              <div className="border-t border-gray-200 pt-3 flex justify-between font-bold text-lg text-gray-900 mb-6">
+                <span>Total</span>
+                <span>A${finalTotal.toFixed(2)}</span>
+              </div>
+
+              {/* Buttons - responsive */}
+              <div className="flex flex-col gap-3">
+                {orderType === 'dine-in' && (
+                  <Button
+                    type="button"
+                    variant="secondary"
+                    size="lg"
+                    className="w-full text-base sm:text-lg py-3 sm:py-4 min-h-[48px] sm:min-h-[56px]"
+                    disabled={isProcessing}
+                    onClick={(e) => handlePlaceOrderPayLater(e, 'You can pay at the table.')}
+                  >
+                    {isProcessing ? 'Placing order...' : 'Place order (pay at table)'}
+                  </Button>
+                )}
+                {orderType === 'pickup' && (
+                  <Button
+                    type="button"
+                    variant="secondary"
+                    size="lg"
+                    className="w-full text-base sm:text-lg py-3 sm:py-4 min-h-[48px] sm:min-h-[56px]"
+                    disabled={isProcessing}
+                    onClick={(e) => handlePlaceOrderPayLater(e, 'Pay at the restaurant when you pickup.')}
+                  >
+                    {isProcessing ? 'Placing order...' : 'Place order (pay at restaurant when pickup)'}
+                  </Button>
+                )}
                 <Button
-                  type="button"
-                  variant="secondary"
+                  type="submit"
                   size="lg"
-                  className="w-full text-lg"
-                  disabled={isProcessing}
-                  onClick={handlePlaceOrderPayAtTable}
+                  className="w-full text-base sm:text-lg py-3 sm:py-4 min-h-[48px] sm:min-h-[56px]"
+                  isLoading={isProcessing}
                 >
-                  {isProcessing ? 'Placing order...' : 'Place order (pay at table)'}
+                  {isProcessing ? 'Processing...' : `Pay A$${finalTotal.toFixed(2)} now`}
                 </Button>
-              )}
-              <Button
-                type="submit"
-                size="lg"
-                className="w-full text-lg"
-                isLoading={isProcessing}
-              >
-                {isProcessing ? 'Processing...' : `Pay $${finalTotal.toFixed(2)} now`}
-              </Button>
-            </div>
+              </div>
+            </Card>
           </div>
         </form>
       </div>

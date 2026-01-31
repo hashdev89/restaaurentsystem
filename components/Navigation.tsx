@@ -15,7 +15,6 @@ import {
   X
 } from 'lucide-react'
 import { useCart } from './providers/CartProvider'
-import { NotificationCenter } from './NotificationCenter'
 import { Button } from './ui/Button'
 
 export function Navigation() {
@@ -39,7 +38,7 @@ export function Navigation() {
   const staffLinks = [
     { href: '/kitchen', label: 'Kitchen', icon: ChefHat },
     { href: '/pos', label: 'POS', icon: CreditCard },
-    { href: '/restaurant/dashboard', label: 'Restaurant', icon: LayoutDashboard },
+    { href: '/restaurant/dashboard', label: 'Restaurant Login', icon: LayoutDashboard },
     { href: '/system/dashboard', label: 'System', icon: Shield },
   ]
 
@@ -55,7 +54,6 @@ export function Navigation() {
 
           {/* Desktop Navigation */}
           <div className="hidden md:flex items-center space-x-1">
-            <NotificationCenter className="mr-1" />
             {navLinks.map((link) => {
               const Icon = link.icon
               return (
@@ -96,9 +94,8 @@ export function Navigation() {
             })}
           </div>
 
-          {/* Mobile: notification bell + menu button */}
+          {/* Mobile: menu button */}
           <div className="md:hidden flex items-center gap-1">
-            <NotificationCenter />
             <button
               onClick={() => setMobileMenuOpen(!mobileMenuOpen)}
               className="p-2 rounded-md text-gray-600 hover:text-gray-900 hover:bg-gray-100"

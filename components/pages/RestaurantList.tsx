@@ -14,111 +14,21 @@ import { cn } from '@/lib/utils'
 import mapboxgl from 'mapbox-gl'
 import 'mapbox-gl/dist/mapbox-gl.css'
 
-// Australian Restaurants Data with coordinates
-export const MOCK_RESTAURANTS: Restaurant[] = [
-  {
-    id: 'rest_1',
-    name: 'The Rocks Cafe',
-    description: 'Authentic Australian cuisine with modern twists. Famous for our meat pies, fish & chips, and classic Aussie burgers.',
-    address: '123 George Street, The Rocks, Sydney NSW 2000',
-    phone: '(02) 9251 2345',
-    image: 'https://images.unsplash.com/photo-1517248135467-4c7edcad34c4?w=800&q=80',
-    isActive: true,
-    rating: 4.6,
-    reviewCount: 342,
-    location: 'The Rocks, Sydney',
-    totalSeats: 50,
-    availableSeats: 35,
-    coordinates: { lat: -33.8598, lng: 151.2093 },
-    priceRange: 'moderate',
-    cuisineTypes: ['Australian', 'Burgers', 'Fish & Chips']
-  },
-  {
-    id: 'rest_2',
-    name: 'Melbourne Pasta House',
-    description: 'Traditional Italian cuisine with fresh pasta made daily. Wood-fired pizzas and authentic Italian flavors in the heart of Melbourne.',
-    address: '456 Collins Street, Melbourne VIC 3000',
-    phone: '(03) 9650 1234',
-    image: 'https://images.unsplash.com/photo-1555396273-367ea4eb4db5?w=800&q=80',
-    isActive: true,
-    rating: 4.8,
-    reviewCount: 289,
-    location: 'Melbourne CBD',
-    totalSeats: 80,
-    availableSeats: 45,
-    coordinates: { lat: -37.8136, lng: 144.9631 },
-    priceRange: 'moderate',
-    cuisineTypes: ['Italian', 'Pizza', 'Pasta']
-  },
-  {
-    id: 'rest_3',
-    name: 'Brisbane Sushi Bar',
-    description: 'Premium Japanese sushi and sashimi. Experience traditional Japanese dining with fresh, locally-sourced seafood.',
-    address: '789 Queen Street, Brisbane QLD 4000',
-    phone: '(07) 3221 5678',
-    image: 'https://images.unsplash.com/photo-1579871494447-9811cf80d66c?w=800&q=80',
-    isActive: true,
-    rating: 4.7,
-    reviewCount: 412,
-    location: 'Brisbane CBD',
-    totalSeats: 60,
-    availableSeats: 28,
-    coordinates: { lat: -27.4698, lng: 153.0251 },
-    priceRange: 'expensive',
-    cuisineTypes: ['Japanese', 'Sushi', 'Seafood']
-  },
-  {
-    id: 'rest_4',
-    name: 'Perth Curry House',
-    description: 'Aromatic Indian curries and tandoori specialties. A journey of authentic Indian flavors in every bite.',
-    address: '321 Hay Street, Perth WA 6000',
-    phone: '(08) 9321 7890',
-    image: 'https://images.unsplash.com/photo-1585937421612-70a008356f36?w=800&q=80',
-    isActive: true,
-    rating: 4.5,
-    reviewCount: 198,
-    location: 'Perth CBD',
-    totalSeats: 70,
-    availableSeats: 52,
-    coordinates: { lat: -31.9505, lng: 115.8605 },
-    priceRange: 'moderate',
-    cuisineTypes: ['Indian', 'Curry', 'Vegetarian']
-  },
-  {
-    id: 'rest_5',
-    name: 'Adelaide Steakhouse',
-    description: 'Premium Australian beef and lamb. Grilled to perfection with locally-sourced produce and fine wines.',
-    address: '654 Rundle Street, Adelaide SA 5000',
-    phone: '(08) 8234 5678',
-    image: 'https://images.unsplash.com/photo-1546833999-b9f581a1996d?w=800&q=80',
-    isActive: true,
-    rating: 4.9,
-    reviewCount: 521,
-    location: 'Adelaide CBD',
-    totalSeats: 90,
-    availableSeats: 38,
-    coordinates: { lat: -34.9285, lng: 138.6007 },
-    priceRange: 'expensive',
-    cuisineTypes: ['Steakhouse', 'Australian', 'Fine Dining']
-  },
-  {
-    id: 'rest_6',
-    name: 'Hobart Seafood Grill',
-    description: 'Fresh Tasmanian seafood. Specializing in salmon, oysters, and lobster with stunning harbor views.',
-    address: '987 Salamanca Place, Hobart TAS 7000',
-    phone: '(03) 6234 1234',
-    image: 'https://images.unsplash.com/photo-1559339352-11d035aa65de?w=800&q=80',
-    isActive: true,
-    rating: 4.7,
-    reviewCount: 267,
-    location: 'Hobart',
-    totalSeats: 40,
-    availableSeats: 22,
-    coordinates: { lat: -42.8821, lng: 147.3272 },
-    priceRange: 'premium',
-    cuisineTypes: ['Seafood', 'Australian', 'Fine Dining']
+/** Map API restaurant row to Restaurant type */
+function mapApiRestaurant(row: { id: string; name: string; description: string | null; address: string; phone: string; image: string | null; location: string | null; is_active: boolean; rating: number; review_count: number }): Restaurant {
+  return {
+    id: row.id,
+    name: row.name,
+    description: row.description ?? '',
+    address: row.address,
+    phone: row.phone,
+    image: row.image ?? 'https://images.unsplash.com/photo-1517248135467-4c7edcad34c4?w=800&q=80',
+    isActive: row.is_active,
+    rating: Number(row.rating),
+    reviewCount: Number(row.review_count),
+    location: row.location ?? '',
   }
-]
+}
 
 const LOCATIONS = ['All Locations', 'The Rocks, Sydney', 'Melbourne CBD', 'Brisbane CBD', 'Perth CBD', 'Adelaide CBD', 'Hobart']
 const PRICE_RANGES = [
@@ -151,6 +61,27 @@ export function RestaurantList() {
   const [locationError, setLocationError] = useState<string | null>(null)
   const [maxDistance, setMaxDistance] = useState<number>(25) // Default 25km radius
   const [isGettingLocation, setIsGettingLocation] = useState(false)
+  const [restaurants, setRestaurants] = useState<Restaurant[]>([])
+  const [, setRestaurantsLoading] = useState(true)
+
+  useEffect(() => {
+    let cancelled = false
+    async function load() {
+      try {
+        const res = await fetch('/api/restaurants')
+        if (!res.ok) throw new Error(await res.text())
+        const data = await res.json()
+        const list = (data.restaurants ?? []).map(mapApiRestaurant)
+        if (!cancelled) setRestaurants(list)
+      } catch {
+        if (!cancelled) setRestaurants([])
+      } finally {
+        if (!cancelled) setRestaurantsLoading(false)
+      }
+    }
+    load()
+    return () => { cancelled = true }
+  }, [])
 
   // Enable location and get user's current position
   const enableLocation = () => {
@@ -221,20 +152,20 @@ export function RestaurantList() {
   }
 
   const filteredRestaurants = useMemo(() => {
-    let filtered: (Restaurant & { distance?: number })[] = MOCK_RESTAURANTS.filter((restaurant) => {
+    let filtered: (Restaurant & { distance?: number })[] = restaurants.filter((restaurant) => {
     const matchesSearch =
       restaurant.name.toLowerCase().includes(searchQuery.toLowerCase()) ||
         restaurant.description.toLowerCase().includes(searchQuery.toLowerCase()) ||
-        restaurant.cuisineTypes?.some(cuisine => cuisine.toLowerCase().includes(searchQuery.toLowerCase()))
+        (restaurant.cuisineTypes ?? []).some(cuisine => cuisine.toLowerCase().includes(searchQuery.toLowerCase()))
       
     const matchesLocation =
       selectedLocation === 'All Locations' || restaurant.location === selectedLocation
       
       const matchesPriceRange =
-        selectedPriceRange === 'all' || restaurant.priceRange === selectedPriceRange
+        selectedPriceRange === 'all' || (restaurant.priceRange ?? 'moderate') === selectedPriceRange
       
       const matchesCuisine =
-        selectedCuisine === 'All Cuisines' || restaurant.cuisineTypes?.includes(selectedCuisine)
+        selectedCuisine === 'All Cuisines' || (restaurant.cuisineTypes ?? []).includes(selectedCuisine)
       
       return matchesSearch && matchesLocation && matchesPriceRange && matchesCuisine
     })
@@ -281,7 +212,7 @@ export function RestaurantList() {
   })
 
     return filtered
-  }, [searchQuery, selectedLocation, selectedPriceRange, selectedCuisine, sortBy, userLocation, locationEnabled, maxDistance])
+  }, [restaurants, searchQuery, selectedLocation, selectedPriceRange, selectedCuisine, sortBy, userLocation, locationEnabled, maxDistance])
 
   // Map component with interactive Mapbox GL JS
   const mapContainer = useRef<HTMLDivElement>(null)
@@ -289,7 +220,7 @@ export function RestaurantList() {
   const markersRef = useRef<mapboxgl.Marker[]>([])
 
   const MapView = () => {
-    const mapboxToken = process.env.NEXT_PUBLIC_MAPBOX_TOKEN || 'pk.eyJ1IjoiaGFzaGRldjg5IiwiYSI6ImNtZWt3dTJ3cTBhc2Yya29jY2FpZHluZ20ifQ.ID9_-ktKbovDhmeQZL8_1Q'
+    const mapboxToken = (typeof process !== 'undefined' && process.env ? process.env.NEXT_PUBLIC_MAPBOX_TOKEN : undefined) || 'pk.eyJ1IjoiaGFzaGRldjg5IiwiYSI6ImNtZWt3dTJ3cTBhc2Yya29jY2FpZHluZ20ifQ.ID9_-ktKbovDhmeQZL8_1Q'
     
     useEffect(() => {
       if (!mapContainer.current || map.current) return
@@ -338,6 +269,7 @@ export function RestaurantList() {
           map.current = null
         }
       }
+      // eslint-disable-next-line react-hooks/exhaustive-deps -- mapboxToken is from env; init once
     }, [])
 
     // User location marker ref
@@ -390,11 +322,13 @@ export function RestaurantList() {
           userMarkerRef.current = null
         }
       }
+    // eslint-disable-next-line react-hooks/exhaustive-deps -- userLocation, locationEnabled from state; effect updates map when they change
     }, [userLocation, locationEnabled])
 
     // Update markers when filtered restaurants change
     useEffect(() => {
-      if (!map.current) return
+      const mapInstance = map.current
+      if (!mapInstance) return
 
       // Remove existing markers
       markersRef.current.forEach(marker => marker.remove())
@@ -447,10 +381,10 @@ export function RestaurantList() {
         const marker = new mapboxgl.Marker(el)
           .setLngLat([restaurant.coordinates.lng, restaurant.coordinates.lat])
           .setPopup(popup)
-          .addTo(map.current!)
+          .addTo(mapInstance)
 
         // Store restaurant ID with marker for easy lookup
-        ;(marker as any).restaurantId = restaurant.id
+        ;(marker as mapboxgl.Marker & { restaurantId: string }).restaurantId = restaurant.id
 
         // Add click handler
         el.addEventListener('click', () => {
@@ -461,17 +395,17 @@ export function RestaurantList() {
       })
 
       // Add radius circle if location is enabled
-      if (userLocation && locationEnabled && map.current) {
+      if (userLocation && locationEnabled && mapInstance) {
         // Remove existing radius circle if any
-        const existingSource = map.current.getSource('radius-circle')
+        const existingSource = mapInstance.getSource('radius-circle')
         if (existingSource) {
-          if (map.current.getLayer('radius-circle-fill')) {
-            map.current.removeLayer('radius-circle-fill')
+          if (mapInstance.getLayer('radius-circle-fill')) {
+            mapInstance.removeLayer('radius-circle-fill')
           }
-          if (map.current.getLayer('radius-circle-stroke')) {
-            map.current.removeLayer('radius-circle-stroke')
+          if (mapInstance.getLayer('radius-circle-stroke')) {
+            mapInstance.removeLayer('radius-circle-stroke')
           }
-          map.current.removeSource('radius-circle')
+          mapInstance.removeSource('radius-circle')
         }
 
         // Helper function to create circle geometry
@@ -498,7 +432,7 @@ export function RestaurantList() {
         // Create circle geometry
         const circle = createCircle([userLocation.lng, userLocation.lat], maxDistance * 1000) // Convert km to meters
 
-        map.current.addSource('radius-circle', {
+        mapInstance.addSource('radius-circle', {
           type: 'geojson',
           data: {
             type: 'Feature',
@@ -507,7 +441,7 @@ export function RestaurantList() {
           }
         })
 
-        map.current.addLayer({
+        mapInstance.addLayer({
           id: 'radius-circle-fill',
           type: 'fill',
           source: 'radius-circle',
@@ -517,7 +451,7 @@ export function RestaurantList() {
           }
         })
 
-        map.current.addLayer({
+        mapInstance.addLayer({
           id: 'radius-circle-stroke',
           type: 'line',
           source: 'radius-circle',
@@ -529,16 +463,16 @@ export function RestaurantList() {
         })
       } else {
         // Remove radius circle if location disabled
-        if (map.current) {
-          if (map.current.getLayer('radius-circle-fill')) {
-            map.current.removeLayer('radius-circle-fill')
+        if (mapInstance) {
+          if (mapInstance.getLayer('radius-circle-fill')) {
+            mapInstance.removeLayer('radius-circle-fill')
           }
-          if (map.current.getLayer('radius-circle-stroke')) {
-            map.current.removeLayer('radius-circle-stroke')
+          if (mapInstance.getLayer('radius-circle-stroke')) {
+            mapInstance.removeLayer('radius-circle-stroke')
           }
-          const existingSource = map.current.getSource('radius-circle')
+          const existingSource = mapInstance.getSource('radius-circle')
           if (existingSource) {
-            map.current.removeSource('radius-circle')
+            mapInstance.removeSource('radius-circle')
           }
         }
       }
@@ -551,11 +485,12 @@ export function RestaurantList() {
             bounds.extend([restaurant.coordinates.lng, restaurant.coordinates.lat])
           }
         })
-        map.current.fitBounds(bounds, {
+        mapInstance.fitBounds(bounds, {
           padding: { top: 50, bottom: 50, left: 50, right: 50 },
           maxZoom: 12
         })
       }
+      // eslint-disable-next-line react-hooks/exhaustive-deps -- deps used for markers and radius; stable refs/state
     }, [filteredRestaurants, router, userLocation, locationEnabled, maxDistance])
 
     return (
@@ -588,7 +523,7 @@ export function RestaurantList() {
                     setTimeout(() => {
                       // Find marker by restaurant ID (more reliable)
                       const marker = markersRef.current.find(m => 
-                        (m as any).restaurantId === restaurant.id
+                        (m as mapboxgl.Marker & { restaurantId: string }).restaurantId === restaurant.id
                       )
                       
                       if (marker) {

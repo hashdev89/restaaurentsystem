@@ -13,5 +13,13 @@ if (supabaseUrl && supabaseAnonKey) {
   supabase = createClient('https://placeholder.supabase.co', 'placeholder-key')
 }
 
-export { supabase }
+/** Server-only: use service role key to bypass RLS (e.g. delete restaurant, unlink users). Set SUPABASE_SERVICE_ROLE_KEY in .env. */
+function getServiceRoleClient(): SupabaseClient | null {
+  const url = process.env.NEXT_PUBLIC_SUPABASE_URL
+  const key = process.env.SUPABASE_SERVICE_ROLE_KEY
+  if (!url || !key) return null
+  return createClient(url, key)
+}
+
+export { supabase, getServiceRoleClient }
 

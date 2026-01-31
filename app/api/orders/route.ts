@@ -16,11 +16,23 @@ function isUuid(value: string): boolean {
   return UUID_REGEX.test(value || '')
 }
 
+// Normalize phone for matching (digits only)
+function normalizePhone(phone: string): string {
+  return String(phone ?? '').replace(/\D/g, '')
+}
+
 // Create a new order
 export async function POST(request: NextRequest) {
   try {
     const body = await request.json()
     const { restaurantId, customerName, customerEmail, customerPhone, items, total, orderType, tableNumber, paymentStatus, squarePaymentId } = body
+
+    if (!customerName?.trim() || !customerEmail?.trim() || !customerPhone?.trim()) {
+      return NextResponse.json(
+        { error: 'Name, email and phone are required to place an order.' },
+        { status: 400 }
+      )
+    }
 
     let restaurantIdToUse = resolveRestaurantId(restaurantId || '')
 
@@ -66,7 +78,7 @@ export async function POST(request: NextRequest) {
     }
 
     // Insert order items
-    const orderItems = items.map((item: any) => ({
+    const orderItems = items.map((item: { menuItemId: string; name: string; quantity: number; price: number }) => ({
       order_id: order.id,
       menu_item_id: item.menuItemId,
       name: item.name,
@@ -81,12 +93,10 @@ export async function POST(request: NextRequest) {
     }
 
     return NextResponse.json({ orderId: order.id, order }, { status: 201 })
-  } catch (error: any) {
+  } catch (error: unknown) {
     console.error('Order creation error:', error)
-    return NextResponse.json(
-      { error: error.message || 'Failed to create order' },
-      { status: 500 }
-    )
+    const message = error instanceof Error ? error.message : 'Failed to create order'
+    return NextResponse.json({ error: message }, { status: 500 })
   }
 }
 
@@ -96,6 +106,8 @@ export async function GET(request: NextRequest) {
     const { searchParams } = new URL(request.url)
     const restaurantIdParam = searchParams.get('restaurantId')
     const status = searchParams.get('status')
+    const customerPhoneParam = searchParams.get('customerPhone')
+    const customerEmailParam = searchParams.get('customerEmail')
 
     const restaurantId = restaurantIdParam ? resolveRestaurantId(restaurantIdParam) : undefined
 
@@ -121,13 +133,40 @@ export async function GET(request: NextRequest) {
       throw error
     }
 
-    return NextResponse.json({ orders: data })
-  } catch (error: any) {
+    // Deduplicate: one-to-many select can return one order row per order_item; keep one per order and merge items.
+    const raw = (data ?? []) as Array<{ id: string; customer_phone?: string; customer_email?: string; order_items?: unknown[] } & Record<string, unknown>>
+    const byId = new Map<string, (typeof raw)[0]>()
+    for (const row of raw) {
+      const existing = byId.get(row.id)
+      const rowItems = Array.isArray(row.order_items) ? row.order_items : []
+      if (!existing) {
+        byId.set(row.id, { ...row, order_items: [...rowItems] })
+      } else if (rowItems.length > 0) {
+        const existingItems = (existing.order_items ?? []) as { id?: string }[]
+        const merged = [...existingItems]
+        for (const oi of rowItems as { id?: string }[]) {
+          if (!merged.some((m) => m?.id === oi?.id)) merged.push(oi)
+        }
+        existing.order_items = merged
+      }
+    }
+    let orders = Array.from(byId.values())
+
+    // Filter by customer (for "Track your order" – show only this customer's orders)
+    if (customerPhoneParam?.trim()) {
+      const matchPhone = normalizePhone(customerPhoneParam)
+      orders = orders.filter((row) => normalizePhone(String(row.customer_phone ?? '')) === matchPhone)
+    }
+    if (customerEmailParam?.trim()) {
+      const matchEmail = String(customerEmailParam).toLowerCase().trim()
+      orders = orders.filter((row) => String(row.customer_email ?? '').toLowerCase().trim() === matchEmail)
+    }
+
+    return NextResponse.json({ orders })
+  } catch (error: unknown) {
     console.error('Get orders error:', error)
-    return NextResponse.json(
-      { error: error.message || 'Failed to fetch orders' },
-      { status: 500 }
-    )
+    const message = error instanceof Error ? error.message : 'Failed to fetch orders'
+    return NextResponse.json({ error: message }, { status: 500 })
   }
 }
 

@@ -25,6 +25,12 @@ import {
   CreditCard,
   Database,
   X,
+  CheckCircle,
+  AlertCircle,
+  AlertTriangle,
+  Info,
+  Check,
+  Trash2,
 } from 'lucide-react'
 import { Button } from '../ui/Button'
 import { Card } from '../ui/Card'
@@ -32,14 +38,16 @@ import { Input } from '../ui/Input'
 import { useNotification } from '../providers/NotificationProvider'
 import { normalizeOrders } from '@/lib/orders'
 import type { Restaurant, Order } from '@/types'
+import type { Notification, NotificationType } from '@/types/notification'
 
-type Section = 'overview' | 'restaurants' | 'orders' | 'settings' | 'users'
+type Section = 'overview' | 'restaurants' | 'orders' | 'settings' | 'users' | 'notifications'
 
 type RestaurantWithMeta = Restaurant & { orderCount?: number; revenueToday?: number }
 type OrderWithRestaurantName = Order & { restaurantName?: string }
 
 const SIDEBAR_ITEMS: { id: Section; label: string; icon: React.ElementType }[] = [
   { id: 'overview', label: 'Overview', icon: LayoutDashboard },
+  { id: 'notifications', label: 'Notifications', icon: Bell },
   { id: 'restaurants', label: 'Restaurants', icon: Store },
   { id: 'orders', label: 'All Orders', icon: Package },
   { id: 'settings', label: 'System Settings', icon: Settings },
@@ -61,7 +69,15 @@ export function SystemDashboard() {
     phone: '',
     image: '',
     location: '',
+    loginEmail: '',
+    loginPassword: '',
   })
+  const [editingRestaurant, setEditingRestaurant] = useState<RestaurantWithMeta | null>(null)
+  const [editRestaurantForm, setEditRestaurantForm] = useState({ name: '', description: '', address: '', phone: '', image: '', location: '', loginEmail: '', loginPassword: '' })
+  const [editRestaurantUser, setEditRestaurantUser] = useState<{ id: string; email: string } | null>(null)
+  const [editRestaurantSaving, setEditRestaurantSaving] = useState(false)
+  const [restaurantToDelete, setRestaurantToDelete] = useState<RestaurantWithMeta | null>(null)
+  const [deletingRestaurant, setDeletingRestaurant] = useState(false)
   const [users, setUsers] = useState<{ id: string; email: string; name?: string; role: string; restaurantId?: string }[]>([])
   const [usersLoading, setUsersLoading] = useState(true)
   const [showAddUser, setShowAddUser] = useState(false)
@@ -69,7 +85,7 @@ export function SystemDashboard() {
   const [addUserForm, setAddUserForm] = useState<{ email: string; name: string; role: 'customer' | 'restaurant' | 'admin'; restaurantId: string }>({ email: '', name: '', role: 'customer', restaurantId: '' })
   const [settingsLoading, setSettingsLoading] = useState(true)
   const [settingsSaving, setSettingsSaving] = useState(false)
-  const { success, error: showError } = useNotification()
+  const { success, error: showError, notifications, unreadCount, markAllAsRead, markAsRead, remove } = useNotification()
 
   useEffect(() => {
     let cancelled = false
@@ -141,7 +157,7 @@ export function SystemDashboard() {
 
   const handleAddRestaurant = async (e: React.FormEvent) => {
     e.preventDefault()
-    const { name, address, phone } = addRestaurantForm
+    const { name, address, phone, loginEmail, loginPassword } = addRestaurantForm
     if (!name.trim() || !address.trim() || !phone.trim()) {
       showError('Missing fields', 'Name, address, and phone are required.')
       return
@@ -151,20 +167,172 @@ export function SystemDashboard() {
       const res = await fetch('/api/restaurants', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify(addRestaurantForm),
+        body: JSON.stringify({
+          name: addRestaurantForm.name,
+          description: addRestaurantForm.description,
+          address: addRestaurantForm.address,
+          phone: addRestaurantForm.phone,
+          image: addRestaurantForm.image,
+          location: addRestaurantForm.location,
+        }),
       })
       const data = await res.json()
       if (!res.ok) throw new Error(data.error || 'Failed to create restaurant')
-      success('Restaurant added', `${data.restaurant?.name ?? name} has been created. Checkout and dashboard will use it.`)
-      setAddRestaurantForm({ name: '', description: '', address: '', phone: '', image: '', location: '' })
+      const restaurantId = data.restaurant?.id
+      if (restaurantId && loginEmail.trim() && loginPassword && loginPassword.length >= 6) {
+        const userRes = await fetch('/api/users', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({
+            email: loginEmail.trim().toLowerCase(),
+            name: name.trim(),
+            role: 'restaurant',
+            restaurantId,
+            password: loginPassword,
+          }),
+        })
+        if (!userRes.ok) {
+          const userData = await userRes.json().catch(() => ({}))
+          showError('Restaurant created, login not created', userData.error || 'Could not create login user.')
+        } else {
+          success('Restaurant added', `${name} created with login. Staff can sign in at Restaurant Login.`)
+        }
+      } else {
+        success('Restaurant added', `${data.restaurant?.name ?? name} has been created. Add a user (Restaurant role) in Users to enable login.`)
+      }
+      setAddRestaurantForm({ name: '', description: '', address: '', phone: '', image: '', location: '', loginEmail: '', loginPassword: '' })
       setShowAddRestaurant(false)
       const listRes = await fetch('/api/restaurants')
       const listData = await listRes.json()
       if (listRes.ok) setRestaurants(listData.restaurants ?? [])
+      const usersRes = await fetch('/api/users')
+      const usersData = await usersRes.json()
+      if (usersRes.ok) setUsers(usersData.users ?? [])
     } catch (err) {
       showError('Could not add restaurant', err instanceof Error ? err.message : 'Please try again.')
     } finally {
       setAddRestaurantSaving(false)
+    }
+  }
+
+  const openEditRestaurant = async (r: RestaurantWithMeta) => {
+    setEditingRestaurant(r)
+    setEditRestaurantForm({
+      name: r.name,
+      description: r.description ?? '',
+      address: r.address,
+      phone: r.phone,
+      image: r.image ?? '',
+      location: r.location ?? '',
+      loginEmail: '',
+      loginPassword: '',
+    })
+    setEditRestaurantUser(null)
+    try {
+      const res = await fetch(`/api/users?restaurantId=${r.id}`)
+      const data = await res.json()
+      const list = data.users ?? []
+      const restaurantUser = list.find((u: { role: string }) => u.role === 'restaurant')
+      if (restaurantUser) {
+        setEditRestaurantUser({ id: restaurantUser.id, email: restaurantUser.email })
+        setEditRestaurantForm((f) => ({ ...f, loginEmail: restaurantUser.email }))
+      }
+    } catch {
+      // ignore
+    }
+  }
+
+  const handleEditRestaurant = async (e: React.FormEvent) => {
+    e.preventDefault()
+    if (!editingRestaurant) return
+    const { name, address, phone, loginEmail, loginPassword } = editRestaurantForm
+    if (!name.trim() || !address.trim() || !phone.trim()) {
+      showError('Missing fields', 'Name, address, and phone are required.')
+      return
+    }
+    setEditRestaurantSaving(true)
+    try {
+      const res = await fetch(`/api/restaurants/${editingRestaurant.id}`, {
+        method: 'PATCH',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          name: editRestaurantForm.name,
+          description: editRestaurantForm.description,
+          address: editRestaurantForm.address,
+          phone: editRestaurantForm.phone,
+          image: editRestaurantForm.image,
+          location: editRestaurantForm.location,
+        }),
+      })
+      if (!res.ok) throw new Error('Failed to update restaurant')
+      let passwordSaved = false
+      if (editRestaurantUser) {
+        if (loginPassword && loginPassword.length >= 6) {
+          const userRes = await fetch(`/api/users/${editRestaurantUser.id}`, {
+            method: 'PATCH',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({ password: loginPassword }),
+          })
+          if (!userRes.ok) {
+            const userData = await userRes.json().catch(() => ({}))
+            throw new Error(userData.error || 'Failed to save password')
+          }
+          passwordSaved = true
+        }
+      } else if (loginEmail.trim() && loginPassword && loginPassword.length >= 6) {
+        const userRes = await fetch('/api/users', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({
+            email: loginEmail.trim().toLowerCase(),
+            name: name.trim(),
+            role: 'restaurant',
+            restaurantId: editingRestaurant.id,
+            password: loginPassword,
+          }),
+        })
+        if (!userRes.ok) {
+          const userData = await userRes.json().catch(() => ({}))
+          throw new Error(userData.error || 'Failed to create login')
+        }
+        passwordSaved = true
+      }
+      success('Restaurant updated', passwordSaved ? `${name} saved. Login password saved — staff can sign in now.` : `${name} saved.`)
+      setEditingRestaurant(null)
+      const listRes = await fetch('/api/restaurants')
+      const listData = await listRes.json()
+      if (listRes.ok) setRestaurants(listData.restaurants ?? [])
+      const usersRes = await fetch('/api/users')
+      const usersData = await usersRes.json()
+      if (usersRes.ok) setUsers(usersData.users ?? [])
+    } catch (err) {
+      showError('Could not update restaurant', err instanceof Error ? err.message : 'Please try again.')
+    } finally {
+      setEditRestaurantSaving(false)
+    }
+  }
+
+  const handleDeleteRestaurant = async () => {
+    if (!restaurantToDelete) return
+    setDeletingRestaurant(true)
+    try {
+      const res = await fetch(`/api/restaurants/${restaurantToDelete.id}`, { method: 'DELETE' })
+      if (!res.ok) {
+        const data = await res.json().catch(() => ({}))
+        throw new Error(data.error || 'Failed to delete')
+      }
+      success('Restaurant deleted', `${restaurantToDelete.name} has been removed.`)
+      setRestaurantToDelete(null)
+      const listRes = await fetch('/api/restaurants')
+      const listData = await listRes.json()
+      if (listRes.ok) setRestaurants(listData.restaurants ?? [])
+      const usersRes = await fetch('/api/users')
+      const usersData = await usersRes.json()
+      if (usersRes.ok) setUsers(usersData.users ?? [])
+    } catch (err) {
+      showError('Could not delete restaurant', err instanceof Error ? err.message : 'Please try again.')
+    } finally {
+      setDeletingRestaurant(false)
     }
   }
 
@@ -329,6 +497,7 @@ export function SystemDashboard() {
             </h1>
             <p className="text-sm text-gray-500 mt-0.5">
               {section === 'overview' && 'Platform overview and key metrics'}
+              {section === 'notifications' && 'Restaurant, POS, customer errors, updates, and connection issues'}
               {section === 'restaurants' && 'Manage all restaurants on the platform'}
               {section === 'orders' && 'View and filter orders across all restaurants'}
               {section === 'settings' && 'System-wide settings and integrations'}
@@ -412,6 +581,37 @@ export function SystemDashboard() {
             </div>
           )}
 
+          {/* Notifications */}
+          {section === 'notifications' && (
+            <div className="space-y-4">
+              <div className="flex justify-between items-center">
+                <p className="text-gray-600">All notifications from restaurant, POS, customer side: errors, updates, user connection issues.</p>
+                {unreadCount > 0 && (
+                  <Button variant="ghost" size="sm" onClick={markAllAsRead} className="text-orange-600">
+                    <Bell className="w-4 h-4 mr-2" />
+                    Mark all read
+                  </Button>
+                )}
+              </div>
+              <Card className="overflow-hidden">
+                <ul className="divide-y divide-gray-100">
+                  {[...notifications].reverse().length === 0 ? (
+                    <li className="px-6 py-12 text-center text-gray-500">No notifications yet</li>
+                  ) : (
+                    [...notifications].reverse().map((n) => (
+                      <SystemNotificationItem
+                        key={n.id}
+                        notification={n}
+                        onMarkRead={() => markAsRead(n.id)}
+                        onRemove={() => remove(n.id)}
+                      />
+                    ))
+                  )}
+                </ul>
+              </Card>
+            </div>
+          )}
+
           {/* Restaurants */}
           {section === 'restaurants' && (
             <div className="space-y-4">
@@ -477,7 +677,27 @@ export function SystemDashboard() {
                               </span>
                             </td>
                             <td className="px-4 py-3 text-right">
-                              <div className="flex items-center justify-end gap-2">
+                              <div className="flex items-center justify-end gap-2 flex-wrap">
+                                <Button
+                                  variant="ghost"
+                                  size="sm"
+                                  onClick={() => openEditRestaurant(r)}
+                                  title="Edit restaurant and login"
+                                  className="text-orange-600 hover:text-orange-700"
+                                >
+                                  <Edit className="w-4 h-4 mr-1" />
+                                  Edit
+                                </Button>
+                                <Button
+                                  variant="ghost"
+                                  size="sm"
+                                  onClick={() => setRestaurantToDelete(r)}
+                                  title="Delete restaurant"
+                                  className="text-red-600 hover:text-red-700 hover:bg-red-50"
+                                >
+                                  <Trash2 className="w-4 h-4 mr-1" />
+                                  Delete
+                                </Button>
                                 <Button
                                   variant="ghost"
                                   size="sm"
@@ -491,7 +711,7 @@ export function SystemDashboard() {
                                     <ExternalLink className="w-4 h-4" />
                                   </Button>
                                 </Link>
-                                <Link href="/restaurant/dashboard">
+                                <Link href={`/restaurant/${r.id}/dashboard`}>
                                   <Button variant="ghost" size="sm" title="Restaurant dashboard">
                                     <LayoutDashboard className="w-4 h-4" />
                                   </Button>
@@ -568,6 +788,26 @@ export function SystemDashboard() {
                           placeholder="https://…"
                         />
                       </div>
+                      <div className="border-t border-gray-200 pt-4 mt-4">
+                        <h4 className="text-sm font-semibold text-gray-900 mb-2">Restaurant login (optional)</h4>
+                        <p className="text-xs text-gray-500 mb-2">Create login so staff can sign in to this restaurant&apos;s dashboard.</p>
+                        <div className="space-y-2">
+                          <Input
+                            label="Login email"
+                            type="email"
+                            value={addRestaurantForm.loginEmail}
+                            onChange={(e) => setAddRestaurantForm((f) => ({ ...f, loginEmail: e.target.value }))}
+                            placeholder="staff@restaurant.com"
+                          />
+                          <Input
+                            label="Login password (min 8 characters)"
+                            type="password"
+                            value={addRestaurantForm.loginPassword}
+                            onChange={(e) => setAddRestaurantForm((f) => ({ ...f, loginPassword: e.target.value }))}
+                            placeholder="••••••••"
+                          />
+                        </div>
+                      </div>
                       <div className="flex gap-2 pt-2">
                         <Button type="submit" className="bg-orange-600 hover:bg-orange-700" disabled={addRestaurantSaving}>
                           {addRestaurantSaving ? 'Saving…' : 'Add Restaurant'}
@@ -577,6 +817,70 @@ export function SystemDashboard() {
                         </Button>
                       </div>
                     </form>
+                  </Card>
+                </div>
+              )}
+
+              {/* Edit Restaurant modal */}
+              {editingRestaurant && (
+                <div className="fixed inset-0 z-50 flex items-center justify-center p-4 bg-black/50">
+                  <Card className="w-full max-w-md p-6 max-h-[90vh] overflow-y-auto">
+                    <div className="flex justify-between items-center mb-4">
+                      <h3 className="text-lg font-semibold text-gray-900">Edit Restaurant & Login</h3>
+                      <button type="button" onClick={() => setEditingRestaurant(null)} className="p-1 rounded hover:bg-gray-100" aria-label="Close">
+                        <X className="w-5 h-5" />
+                      </button>
+                    </div>
+                    <form onSubmit={handleEditRestaurant} className="space-y-4">
+                      <Input label="Name *" value={editRestaurantForm.name} onChange={(e) => setEditRestaurantForm((f) => ({ ...f, name: e.target.value }))} placeholder="Restaurant name" required />
+                      <Input label="Description" value={editRestaurantForm.description} onChange={(e) => setEditRestaurantForm((f) => ({ ...f, description: e.target.value }))} placeholder="Short description" />
+                      <Input label="Address *" value={editRestaurantForm.address} onChange={(e) => setEditRestaurantForm((f) => ({ ...f, address: e.target.value }))} placeholder="Full address" required />
+                      <Input label="Phone *" value={editRestaurantForm.phone} onChange={(e) => setEditRestaurantForm((f) => ({ ...f, phone: e.target.value }))} placeholder="Phone" required />
+                      <Input label="Location" value={editRestaurantForm.location} onChange={(e) => setEditRestaurantForm((f) => ({ ...f, location: e.target.value }))} placeholder="e.g. Sydney, NSW" />
+                      <Input label="Image URL" value={editRestaurantForm.image} onChange={(e) => setEditRestaurantForm((f) => ({ ...f, image: e.target.value }))} placeholder="https://…" />
+                      <div className="border-t border-gray-200 pt-4 mt-4">
+                        <h4 className="text-sm font-semibold text-gray-900 mb-2">Restaurant login — edit & save password</h4>
+                        {editRestaurantUser ? (
+                          <>
+                            <p className="text-xs text-gray-500 mb-2">Login email: <strong>{editRestaurantUser.email}</strong></p>
+                            <p className="text-xs text-gray-500 mb-2">Set a new password below and click Save to update. Staff use this to sign in at Restaurant Login.</p>
+                            <Input label="New password (min 8 characters — leave blank to keep current)" type="password" value={editRestaurantForm.loginPassword} onChange={(e) => setEditRestaurantForm((f) => ({ ...f, loginPassword: e.target.value }))} placeholder="••••••••" autoComplete="new-password" />
+                          </>
+                        ) : (
+                          <>
+                            <p className="text-xs text-gray-500 mb-2">No login yet. Add email and password below, then Save to create login for this restaurant.</p>
+                            <Input label="Login email" type="email" value={editRestaurantForm.loginEmail} onChange={(e) => setEditRestaurantForm((f) => ({ ...f, loginEmail: e.target.value }))} placeholder="staff@restaurant.com" />
+                            <Input label="Login password (min 8 characters)" type="password" value={editRestaurantForm.loginPassword} onChange={(e) => setEditRestaurantForm((f) => ({ ...f, loginPassword: e.target.value }))} placeholder="••••••••" autoComplete="new-password" />
+                          </>
+                        )}
+                      </div>
+                      <div className="flex gap-2 pt-2">
+                        <Button type="submit" className="bg-orange-600 hover:bg-orange-700" disabled={editRestaurantSaving}>
+                          {editRestaurantSaving ? 'Saving…' : 'Save'}
+                        </Button>
+                        <Button type="button" variant="ghost" onClick={() => setEditingRestaurant(null)}>Cancel</Button>
+                      </div>
+                    </form>
+                  </Card>
+                </div>
+              )}
+
+              {/* Delete Restaurant confirmation */}
+              {restaurantToDelete && (
+                <div className="fixed inset-0 z-50 flex items-center justify-center p-4 bg-black/50">
+                  <Card className="w-full max-w-md p-6">
+                    <h3 className="text-lg font-semibold text-gray-900 mb-2">Delete restaurant?</h3>
+                    <p className="text-gray-600 text-sm mb-4">
+                      <strong>{restaurantToDelete.name}</strong> will be permanently removed. This will also remove its menu items, tables, and related data. This cannot be undone.
+                    </p>
+                    <div className="flex gap-2 justify-end">
+                      <Button variant="ghost" onClick={() => setRestaurantToDelete(null)} disabled={deletingRestaurant}>
+                        Cancel
+                      </Button>
+                      <Button variant="danger" onClick={handleDeleteRestaurant} disabled={deletingRestaurant}>
+                        {deletingRestaurant ? 'Deleting…' : 'Delete'}
+                      </Button>
+                    </div>
                   </Card>
                 </div>
               )}
@@ -867,5 +1171,69 @@ export function SystemDashboard() {
         </div>
       </main>
     </div>
+  )
+}
+
+const NOTIFICATION_ICONS: Record<NotificationType, React.ComponentType<{ className?: string }>> = {
+  success: CheckCircle,
+  error: AlertCircle,
+  warning: AlertTriangle,
+  info: Info,
+}
+
+function formatNotificationTime(ts: number) {
+  const d = new Date(ts)
+  const now = new Date()
+  const diff = now.getTime() - d.getTime()
+  if (diff < 60_000) return 'Just now'
+  if (diff < 3600_000) return `${Math.floor(diff / 60_000)}m ago`
+  if (diff < 86400_000) return `${Math.floor(diff / 3600_000)}h ago`
+  return d.toLocaleDateString()
+}
+
+function SystemNotificationItem({
+  notification,
+  onMarkRead,
+  onRemove,
+}: {
+  notification: Notification
+  onMarkRead: () => void
+  onRemove: () => void
+}) {
+  const Icon = NOTIFICATION_ICONS[notification.type]
+  const isUnread = !notification.read
+  return (
+    <li className="flex gap-3 px-6 py-4 text-left transition-colors border-b border-gray-100 last:border-0">
+      <div className={`shrink-0 w-9 h-9 rounded-full flex items-center justify-center ${
+        notification.type === 'success' ? 'bg-emerald-100' :
+        notification.type === 'error' ? 'bg-red-100' :
+        notification.type === 'warning' ? 'bg-amber-100' : 'bg-sky-100'
+      }`}>
+        <Icon className={`w-4 h-4 ${
+          notification.type === 'success' ? 'text-emerald-600' :
+          notification.type === 'error' ? 'text-red-600' :
+          notification.type === 'warning' ? 'text-amber-600' : 'text-sky-600'
+        }`} />
+      </div>
+      <div className="flex-1 min-w-0">
+        <p className={`text-sm font-medium ${isUnread ? 'text-gray-900' : 'text-gray-700'}`}>
+          {notification.title}
+        </p>
+        {notification.message && (
+          <p className="text-xs text-gray-500 mt-0.5">{notification.message}</p>
+        )}
+        <p className="text-xs text-gray-400 mt-1">{formatNotificationTime(notification.timestamp)}</p>
+      </div>
+      <div className="flex items-center gap-1 shrink-0">
+        {isUnread && (
+          <button type="button" onClick={onMarkRead} className="p-2 rounded text-gray-400 hover:text-orange-600 hover:bg-orange-50" title="Mark as read">
+            <Check className="w-4 h-4" />
+          </button>
+        )}
+        <button type="button" onClick={onRemove} className="p-2 rounded text-gray-400 hover:text-red-600 hover:bg-red-50" title="Remove">
+          <Trash2 className="w-4 h-4" />
+        </button>
+      </div>
+    </li>
   )
 }

@@ -25,8 +25,9 @@ export async function PATCH(
 
     if (error) throw error
     return NextResponse.json({ item: data })
-  } catch (error: any) {
+  } catch (error: unknown) {
     console.error('Update inventory error:', error)
-    return NextResponse.json({ error: error.message || 'Failed to update' }, { status: 500 })
+    const message = error instanceof Error ? error.message : 'Failed to update'
+    return NextResponse.json({ error: message }, { status: 500 })
   }
 }

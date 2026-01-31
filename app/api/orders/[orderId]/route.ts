@@ -10,7 +10,7 @@ export async function PATCH(
     const body = await request.json()
     const { status, estimatedReadyTime } = body
 
-    const updateData: any = {
+    const updateData: { updated_at: string; status?: string; estimated_ready_time?: string } = {
       updated_at: new Date().toISOString()
     }
 
@@ -34,12 +34,10 @@ export async function PATCH(
     }
 
     return NextResponse.json({ order: data })
-  } catch (error: any) {
+  } catch (error: unknown) {
     console.error('Update order error:', error)
-    return NextResponse.json(
-      { error: error.message || 'Failed to update order' },
-      { status: 500 }
-    )
+    const message = error instanceof Error ? error.message : 'Failed to update order'
+    return NextResponse.json({ error: message }, { status: 500 })
   }
 }
 

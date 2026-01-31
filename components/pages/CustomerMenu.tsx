@@ -9,167 +9,21 @@ import { Button } from '@/components/ui/Button'
 import { Input } from '@/components/ui/Input'
 import { useCart } from '@/components/providers/CartProvider'
 import { MenuItem as MenuItemType, Restaurant } from '@/types'
-import { MOCK_RESTAURANTS } from './RestaurantList'
 
-// Expanded Mock Menu Data for Australian Restaurants
-const MOCK_MENU: MenuItemType[] = [
-  // The Rocks Cafe (rest_1)
-  {
-    id: '1',
-    restaurantId: 'rest_1',
-    name: 'Aussie Beef Pie',
-    description: 'Traditional Australian meat pie with premium beef, gravy, and flaky pastry. Served with tomato sauce.',
-    price: 12.99,
-    category: 'Mains',
-    image: 'https://images.unsplash.com/photo-1568901346375-23c9450c58cd?w=800&q=80',
-    isAvailable: true
-  },
-  {
-    id: '2',
-    restaurantId: 'rest_1',
-    name: 'Fish & Chips',
-    description: 'Beer-battered barramundi with hand-cut chips, lemon, and tartar sauce.',
-    price: 18.50,
-    category: 'Mains',
-    image: 'https://images.unsplash.com/photo-1546069901-ba9599a7e63c?w=800&q=80',
-    isAvailable: true
-  },
-  {
-    id: '3',
-    restaurantId: 'rest_1',
-    name: 'Aussie Burger',
-    description: 'Beef patty, beetroot, egg, bacon, cheese, lettuce, tomato, and onion on a brioche bun.',
-    price: 16.99,
-    category: 'Mains',
-    image: 'https://images.unsplash.com/photo-1568901346375-23c9450c58cd?w=800&q=80',
-    isAvailable: true
-  },
-  {
-    id: '4',
-    restaurantId: 'rest_1',
-    name: 'Pavlova',
-    description: 'Classic Australian dessert with meringue, fresh cream, and seasonal fruits.',
-    price: 9.50,
-    category: 'Desserts',
-    image: 'https://images.unsplash.com/photo-1572490122747-3968b75cc699?w=800&q=80',
-    isAvailable: true
-  },
-  // Melbourne Pasta House (rest_2)
-  {
-    id: '5',
-    restaurantId: 'rest_2',
-    name: 'Margherita Pizza',
-    description: 'Fresh mozzarella, basil, and tomato sauce on our hand-tossed sourdough crust.',
-    price: 22.00,
-    category: 'Mains',
-    image: 'https://images.unsplash.com/photo-1604382354936-07c5d9983bd3?w=800&q=80',
-    isAvailable: true
-  },
-  {
-    id: '6',
-    restaurantId: 'rest_2',
-    name: 'Spaghetti Carbonara',
-    description: 'Classic Roman pasta with eggs, cheese, pancetta, and black pepper.',
-    price: 24.50,
-    category: 'Mains',
-    image: 'https://images.unsplash.com/photo-1612874742237-6526221588e3?w=800&q=80',
-    isAvailable: true
-  },
-  {
-    id: '7',
-    restaurantId: 'rest_2',
-    name: 'Tiramisu',
-    description: 'Classic Italian dessert with layers of coffee-soaked ladyfingers and mascarpone cream.',
-    price: 12.00,
-    category: 'Desserts',
-    image: 'https://images.unsplash.com/photo-1571877227200-a0d98ea607e9?w=800&q=80',
-    isAvailable: true
-  },
-  // Brisbane Sushi Bar (rest_3)
-  {
-    id: '8',
-    restaurantId: 'rest_3',
-    name: 'Dragon Roll',
-    description: 'Shrimp tempura and cucumber topped with avocado and eel sauce.',
-    price: 18.50,
-    category: 'Mains',
-    image: 'https://images.unsplash.com/photo-1579584425555-c3ce17fd43ca?w=800&q=80',
-    isAvailable: true
-  },
-  {
-    id: '9',
-    restaurantId: 'rest_3',
-    name: 'Miso Soup',
-    description: 'Traditional Japanese soup with tofu, seaweed, and green onions.',
-    price: 6.50,
-    category: 'Starters',
-    image: 'https://images.unsplash.com/photo-1547592166-23acbe3a624b?w=800&q=80',
-    isAvailable: true
-  },
-  // Perth Curry House (rest_4)
-  {
-    id: '10',
-    restaurantId: 'rest_4',
-    name: 'Butter Chicken',
-    description: 'Tender chicken cooked in a rich tomato and butter gravy.',
-    price: 24.00,
-    category: 'Mains',
-    image: 'https://images.unsplash.com/photo-1603894584373-5ac82b2ae398?w=800&q=80',
-    isAvailable: true
-  },
-  {
-    id: '11',
-    restaurantId: 'rest_4',
-    name: 'Garlic Naan',
-    description: 'Oven-baked flatbread topped with garlic and cilantro.',
-    price: 5.50,
-    category: 'Sides',
-    image: 'https://images.unsplash.com/photo-1626074353765-517a681e40be?w=800&q=80',
-    isAvailable: true
-  },
-  // Adelaide Steakhouse (rest_5)
-  {
-    id: '12',
-    restaurantId: 'rest_5',
-    name: 'Wagyu Ribeye',
-    description: 'Premium Australian Wagyu beef, grilled to perfection. Served with roasted vegetables.',
-    price: 45.00,
-    category: 'Mains',
-    image: 'https://images.unsplash.com/photo-1546833999-b9f581a1996d?w=800&q=80',
-    isAvailable: true
-  },
-  {
-    id: '13',
-    restaurantId: 'rest_5',
-    name: 'Lamb Cutlets',
-    description: 'Tender lamb cutlets with mint sauce and seasonal vegetables.',
-    price: 32.00,
-    category: 'Mains',
-    image: 'https://images.unsplash.com/photo-1546833999-b9f581a1996d?w=800&q=80',
-    isAvailable: true
-  },
-  // Hobart Seafood Grill (rest_6)
-  {
-    id: '14',
-    restaurantId: 'rest_6',
-    name: 'Tasmanian Salmon',
-    description: 'Fresh Tasmanian salmon, pan-seared with lemon butter sauce and seasonal vegetables.',
-    price: 28.50,
-    category: 'Mains',
-    image: 'https://images.unsplash.com/photo-1559339352-11d035aa65de?w=800&q=80',
-    isAvailable: true
-  },
-  {
-    id: '15',
-    restaurantId: 'rest_6',
-    name: 'Oysters Natural',
-    description: 'Fresh Tasmanian oysters served natural with lemon and mignonette.',
-    price: 22.00,
-    category: 'Starters',
-    image: 'https://images.unsplash.com/photo-1559339352-11d035aa65de?w=800&q=80',
-    isAvailable: true
+function mapApiRestaurant(row: { id: string; name: string; description: string | null; address: string; phone: string; image: string | null; location: string | null; is_active: boolean; rating: number; review_count: number }): Restaurant {
+  return {
+    id: row.id,
+    name: row.name,
+    description: row.description ?? '',
+    address: row.address,
+    phone: row.phone,
+    image: row.image ?? '',
+    isActive: row.is_active,
+    rating: Number(row.rating),
+    reviewCount: Number(row.review_count),
+    location: row.location ?? '',
   }
-]
+}
 
 export function CustomerMenu() {
   const params = useParams()
@@ -181,12 +35,40 @@ export function CustomerMenu() {
   const [selectedCategory, setSelectedCategory] = useState('All')
   const [searchQuery, setSearchQuery] = useState('')
   const [restaurant, setRestaurant] = useState<Restaurant | null>(null)
+  const [menuItems, setMenuItems] = useState<MenuItemType[]>([])
+  const [loading, setLoading] = useState(true)
 
   useEffect(() => {
-    const foundRestaurant = MOCK_RESTAURANTS.find((r) => r.id === restaurantId)
-    if (foundRestaurant) {
-      setRestaurant(foundRestaurant)
+    if (!restaurantId) {
+      setLoading(false)
+      return
     }
+    let cancelled = false
+    async function load() {
+      setLoading(true)
+      try {
+        const [resRes, resMenu] = await Promise.all([
+          fetch('/api/restaurants'),
+          fetch(`/api/menu-items?restaurantId=${encodeURIComponent(restaurantId)}`),
+        ])
+        if (cancelled) return
+        if (resRes.ok) {
+          const data = await resRes.json()
+          const found = (data.restaurants ?? []).find((r: { id: string }) => r.id === restaurantId)
+          if (found) setRestaurant(mapApiRestaurant(found))
+        }
+        if (resMenu.ok) {
+          const data = await resMenu.json()
+          setMenuItems(data.items ?? [])
+        }
+      } catch {
+        if (!cancelled) setRestaurant(null)
+      } finally {
+        if (!cancelled) setLoading(false)
+      }
+    }
+    load()
+    return () => { cancelled = true }
   }, [restaurantId])
 
   useEffect(() => {
@@ -209,22 +91,34 @@ export function CustomerMenu() {
     return stars
   }
 
-  if (!restaurantId || !restaurant) {
+  if (!restaurantId) {
     return (
       <div className="min-h-screen flex flex-col items-center justify-center bg-gray-50 p-4">
-        <h2 className="text-2xl font-bold text-gray-900 mb-4">
-          Restaurant Not Found
-        </h2>
-        <p className="text-gray-500 mb-8">
-          The restaurant you're looking for doesn't exist or is currently unavailable.
-        </p>
+        <h2 className="text-2xl font-bold text-gray-900 mb-4">Restaurant Not Found</h2>
         <Button onClick={() => router.push('/')}>Back to Restaurants</Button>
       </div>
     )
   }
 
-  // Filter items for this restaurant
-  const restaurantItems = MOCK_MENU.filter((item) => item.restaurantId === restaurantId)
+  if (loading) {
+    return (
+      <div className="min-h-screen flex flex-col items-center justify-center bg-gray-50 p-4">
+        <p className="text-gray-500">Loading restaurant…</p>
+      </div>
+    )
+  }
+
+  if (!restaurant) {
+    return (
+      <div className="min-h-screen flex flex-col items-center justify-center bg-gray-50 p-4">
+        <h2 className="text-2xl font-bold text-gray-900 mb-4">Restaurant Not Found</h2>
+        <p className="text-gray-500 mb-8">The restaurant doesn&apos;t exist or is unavailable.</p>
+        <Button onClick={() => router.push('/')}>Back to Restaurants</Button>
+      </div>
+    )
+  }
+
+  const restaurantItems = menuItems
   // Get unique categories for this restaurant
   const categories = ['All', ...Array.from(new Set(restaurantItems.map((item) => item.category)))]
 

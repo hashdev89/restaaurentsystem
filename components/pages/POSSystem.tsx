@@ -27,17 +27,20 @@ import {
   Zap,
   ArrowLeft,
   Clock,
-  TrendingUp
+  TrendingUp,
+  Pencil,
+  ScanBarcode
 } from 'lucide-react'
 import { useNotification } from '../providers/NotificationProvider'
+import { NotificationCenter } from '../NotificationCenter'
 import { Button } from '../ui/Button'
 import { Input } from '../ui/Input'
 import { Badge } from '../ui/Badge'
 import { Dialog, DialogContent } from '../ui/dialog'
 import { Tabs, TabsList, TabsTrigger } from '../ui/tabs'
 import { cn } from '@/lib/utils'
-import { OrderType } from '@/types'
-import { MOCK_RESTAURANTS } from './RestaurantList'
+import { normalizeOrders, type SupabaseOrderRow } from '@/lib/orders'
+import { OrderType, type Order } from '@/types'
 
 // Types
 interface CustomizationOption {
@@ -103,6 +106,37 @@ interface Discount {
   type: DiscountType
   value: number
   name?: string
+}
+
+/** Local POS order summary (completed orders list in POS), not the API Order type */
+interface POSOrderSummary {
+  id: string
+  orderNumber: number
+  items: CartItem[]
+  total: number
+  subtotalExGst: number
+  totalGst: number
+  discount: Discount | null
+  tip: number
+  paymentMethod: PaymentMethod
+  paymentStatus: string
+  orderType: OrderType
+  tableNumber: string
+  customerName: string
+  createdAt: string
+  status: string
+}
+
+/** Transaction row shown in POS Transactions tab */
+interface POSTransaction {
+  id: string
+  orderId?: string
+  orderNumber: number
+  amount: number
+  paymentMethod: string
+  paymentStatus: string
+  createdAt: string
+  items: number
 }
 
 // GST constant (Australian GST is 10%)
@@ -593,6 +627,7 @@ export function POSSystem() {
   const [showCustomizationModal, setShowCustomizationModal] = useState(false)
   const [showPaymentModal, setShowPaymentModal] = useState(false)
   const [showDiscountModal, setShowDiscountModal] = useState(false)
+  const [showClearConfirm, setShowClearConfirm] = useState(false)
   const [selectedCustomizations, setSelectedCustomizations] = useState<Record<string, string[]>>({})
   const [paymentMethod, setPaymentMethod] = useState<PaymentMethod>('card')
   const [discount, setDiscount] = useState<Discount | null>(null)
@@ -601,14 +636,69 @@ export function POSSystem() {
   const [orderNumber, setOrderNumber] = useState(1)
   const searchInputRef = useRef<HTMLInputElement>(null)
   const [activeSection, setActiveSection] = useState<'menu' | 'orders' | 'transactions' | 'items' | 'more'>('menu')
-  const [orders, setOrders] = useState<any[]>([])
-  const [transactions, setTransactions] = useState<any[]>([])
+  const [orders, setOrders] = useState<POSOrderSummary[]>([])
+  const [pendingOrdersFromApi, setPendingOrdersFromApi] = useState<Order[]>([])
+  const [pendingOrdersLoading, setPendingOrdersLoading] = useState(false)
+  const [transactions, setTransactions] = useState<POSTransaction[]>([])
   const [showItemModal, setShowItemModal] = useState(false)
   const [editingItem, setEditingItem] = useState<POSSubItem | null>(null)
+  const [itemFormData, setItemFormData] = useState<Partial<POSSubItem> & { categoryId?: string }>({})
+  const [defaultRestaurantId, setDefaultRestaurantId] = useState<string>('')
+  const [barcodeScanValue, setBarcodeScanValue] = useState('')
+  const barcodeInputRef = useRef<HTMLInputElement>(null)
+  /** When set, cart was loaded from a ready order; completing payment will PATCH this order to completed instead of creating a new order */
+  const [orderIdForBilling, setOrderIdForBilling] = useState<string | null>(null)
   // Categories state so we can add/edit/delete items (initialized from POS_CATEGORIES)
   const [categories, setCategories] = useState<POSCategory[]>(() =>
     POS_CATEGORIES.map(cat => ({ ...cat, subItems: cat.subItems.map(s => ({ ...s })) }))
   )
+
+  // Resolve default restaurant for order creation (env or first from API)
+  useEffect(() => {
+    const envId = typeof process !== 'undefined' && process.env ? process.env.NEXT_PUBLIC_DEFAULT_RESTAURANT_ID : undefined
+    if (envId) {
+      setDefaultRestaurantId(envId)
+      return
+    }
+    let cancelled = false
+    fetch('/api/restaurants')
+      .then((res) => res.ok ? res.json() : null)
+      .then((data) => {
+        if (cancelled || !data?.restaurants?.length) return
+        setDefaultRestaurantId(data.restaurants[0].id)
+      })
+      .catch(() => { /* ignore */ })
+    return () => { cancelled = true }
+  }, [])
+
+  // Only show loading spinner on first fetch for Orders tab; background refresh stays silent
+  const ordersInitialLoadDone = useRef(false)
+  const fetchPendingOrders = useCallback(async () => {
+    if (!defaultRestaurantId) return
+    if (!ordersInitialLoadDone.current) setPendingOrdersLoading(true)
+    try {
+      const res = await fetch(`/api/orders?restaurantId=${encodeURIComponent(defaultRestaurantId)}`)
+      if (!res.ok) return
+      const data = await res.json()
+      const list = (data.orders ?? []) as SupabaseOrderRow[]
+      const normalized = normalizeOrders(list)
+      const normStatus = (s: string) => String(s ?? '').toLowerCase().trim()
+      const withNormStatus = normalized.map((o) => ({ ...o, status: normStatus(o.status) as Order['status'] }))
+      setPendingOrdersFromApi(withNormStatus.filter((o) => ['pending', 'accepted', 'preparing', 'ready'].includes(o.status)))
+    } catch (e) {
+      console.error('POS fetch pending orders error:', e)
+    } finally {
+      ordersInitialLoadDone.current = true
+      setPendingOrdersLoading(false)
+    }
+  }, [defaultRestaurantId])
+
+  useEffect(() => {
+    if (activeSection !== 'orders' || !defaultRestaurantId) return
+    fetchPendingOrders()
+    const interval = setInterval(fetchPendingOrders, 8000)
+    return () => clearInterval(interval)
+  }, [activeSection, defaultRestaurantId, fetchPendingOrders])
 
   // Filtered items
   const filteredItems = useMemo(() => {
@@ -626,7 +716,7 @@ export function POSSystem() {
     }
     
     return items.filter(item => item.isAvailable)
-  }, [selectedCategory, searchQuery])
+  }, [selectedCategory, searchQuery, categories])
 
   // Get available item count for each category
   const getCategoryItemCount = (categoryId: string) => {
@@ -711,7 +801,7 @@ export function POSSystem() {
 
       return [...prev, cartItem]
     })
-  }, [])
+  }, [categories])
 
   // Direct add to cart (clicking item card)
   const handleItemClick = useCallback((item: POSSubItem, e: React.MouseEvent) => {
@@ -738,6 +828,109 @@ export function POSSystem() {
     setSelectedCustomizations({})
     setShowCustomizationModal(true)
   }, [])
+
+  // Barcode scan: look up inventory and add to cart
+  const handleBarcodeScan = useCallback(async () => {
+    const code = barcodeScanValue.trim()
+    if (!code) return
+    if (!defaultRestaurantId) {
+      warning('No restaurant', 'Select or set default restaurant first.')
+      return
+    }
+    setBarcodeScanValue('')
+    try {
+      const res = await fetch(`/api/inventory?restaurantId=${encodeURIComponent(defaultRestaurantId)}&barcode=${encodeURIComponent(code)}`)
+      if (!res.ok) throw new Error('Lookup failed')
+      const data = await res.json()
+      const items = data.items ?? []
+      const inv = items[0]
+      if (!inv) {
+        warning('Barcode not found', `No item with barcode "${code}". Add it in Restaurant Dashboard → Stock.`)
+        barcodeInputRef.current?.focus()
+        return
+      }
+      const price = Number(inv.price) || 0
+      const basePrice = price
+      const gstAmount = basePrice * GST_RATE
+      const finalPrice = basePrice + gstAmount
+      const cartId = `barcode-${inv.barcode}`
+      setCart((prev) => {
+        const existing = prev.find((i) => i.id === cartId)
+        if (existing) {
+          return prev.map((i) =>
+            i.id === cartId ? { ...i, quantity: i.quantity + 1 } : i
+          )
+        }
+        const newItem: CartItem = {
+          id: cartId,
+          name: inv.name,
+          description: 'Barcode item',
+          basePrice,
+          quantity: 1,
+          categoryName: 'Barcode',
+          customizations: [],
+          finalPrice,
+          gstAmount
+        }
+        return [...prev, newItem]
+      })
+      success('Added', `${inv.name} added to cart`)
+    } catch (e) {
+      warning('Barcode lookup failed', e instanceof Error ? e.message : 'Could not find item')
+    }
+    barcodeInputRef.current?.focus()
+  }, [barcodeScanValue, defaultRestaurantId, warning, success])
+
+  const handleBarcodeKeyDown = useCallback(
+    (e: React.KeyboardEvent<HTMLInputElement>) => {
+      if (e.key === 'Enter') {
+        e.preventDefault()
+        handleBarcodeScan()
+      }
+    },
+    [handleBarcodeScan]
+  )
+
+  const handleProceedToBilling = useCallback(
+    (orderId: string) => {
+      const order = pendingOrdersFromApi.find((o) => o.id === orderId)
+      if (!order) {
+        warning('Order not found', 'Order may have been updated. Refreshing list.')
+        fetchPendingOrders()
+        return
+      }
+      // Convert order items to POS cart items (price from API is per-unit; assume incl GST if > 0)
+      const cartItems: CartItem[] = order.items.map((item, idx) => {
+        const pricePerUnit = Number(item.price) || 0
+        const finalPrice = pricePerUnit
+        const basePrice = pricePerUnit / (1 + GST_RATE)
+        const gstAmount = basePrice * GST_RATE
+        return {
+          id: `${order.id}-${item.menuItemId ?? idx}-${idx}`,
+          name: item.name,
+          description: '',
+          basePrice,
+          quantity: item.quantity,
+          categoryName: 'Order',
+          customizations: [],
+          finalPrice,
+          gstAmount
+        }
+      })
+      setCart(cartItems)
+      setOrderIdForBilling(order.id)
+      setOrderType((order.orderType as OrderType) || 'dine-in')
+      setTableNumber(order.tableNumber ?? '')
+      setCustomerName(order.customerName ?? '')
+      setOrderNotes('')
+      setDiscount(null)
+      setTip(0)
+      setTipPercentage(null)
+      setActiveSection('menu')
+      success('Order loaded into cart', 'Complete checkout to finish billing for this order.')
+    },
+    [pendingOrdersFromApi, success, warning, fetchPendingOrders]
+  )
 
   const toggleCustomization = (groupId: string, optionId: string, maxSelections?: number) => {
     setSelectedCustomizations((prev) => {
@@ -837,17 +1030,21 @@ export function POSSystem() {
     setCart(prev => prev.filter(i => i.id !== itemId))
   }
 
-  const clearCart = () => {
+  const openClearConfirm = () => {
     if (cart.length === 0) return
-    if (confirm('Clear current order?')) {
-      setCart([])
-      setTableNumber('')
-      setCustomerName('')
-      setOrderNotes('')
-      setDiscount(null)
-      setTip(0)
-      setTipPercentage(null)
-    }
+    setShowClearConfirm(true)
+  }
+
+  const clearCart = () => {
+    setCart([])
+    setTableNumber('')
+    setCustomerName('')
+    setOrderNotes('')
+    setDiscount(null)
+    setTip(0)
+    setTipPercentage(null)
+    setOrderIdForBilling(null)
+    setShowClearConfirm(false)
   }
 
   // Print receipt function for standard POS thermal printers
@@ -1038,8 +1235,6 @@ export function POSSystem() {
 
     <div class="items">
       ${cart.map(item => {
-        const itemPriceExGst = item.basePrice + item.customizations.reduce((sum, c) => sum + c.totalPrice, 0)
-        const itemGst = item.gstAmount
         const itemPriceInclGst = item.finalPrice
         return `
         <div class="item-row">
@@ -1161,46 +1356,82 @@ export function POSSystem() {
     setIsProcessing(true)
 
     try {
-      const orderId = `POS-${Date.now()}-${orderNumber}`
-      
-      // BYPASS PAYMENT GATEWAY FOR TESTING
-      // Skip actual payment API call and create mock payment response
+      const paymentStatus = 'captured'
       const paymentData = {
         paymentId: `test-${paymentMethod}-${Date.now()}`,
         status: 'COMPLETED',
         message: 'Payment bypassed for testing'
       }
 
-      // Determine payment status - always captured for testing
-      const paymentStatus = 'captured'
+      // Billing an existing order (loaded via "Proceed to billing" from ready order): PATCH to completed, no new order
+      if (orderIdForBilling) {
+        try {
+          const res = await fetch(`/api/orders/${orderIdForBilling}`, {
+            method: 'PATCH',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({ status: 'completed' })
+          })
+          if (!res.ok) throw new Error('Update failed')
+          success('Billing complete', 'Order marked as completed.')
+          fetchPendingOrders()
+          alert(`✅ Billing complete.\n\nOrder marked as completed. Receipt printed.`)
+        } catch (e) {
+          warning('Could not complete order', e instanceof Error ? e.message : 'Failed to update order')
+        }
+        setTimeout(() => printReceipt(), 500)
+        const txnId = `txn-${Date.now()}`
+        setTransactions(prev => [{
+          id: txnId,
+          orderId: orderIdForBilling,
+          orderNumber: orderNumber,
+          amount: total,
+          paymentMethod,
+          paymentStatus,
+          createdAt: new Date().toISOString(),
+          items: cart.length
+        }, ...prev])
+        setCart([])
+        setTableNumber('')
+        setCustomerName('')
+        setOrderNotes('')
+        setDiscount(null)
+        setTip(0)
+        setTipPercentage(null)
+        setOrderIdForBilling(null)
+        setOrderNumber(prev => prev + 1)
+        setShowPaymentModal(false)
+        setPaymentMethod('card')
+        setIsProcessing(false)
+        return
+      }
 
-      // Try to create order in backend, but continue even if it fails (for testing)
+      // New order from POS: create order in backend
+      const orderId = `POS-${Date.now()}-${orderNumber}`
       try {
         const orderResponse = await fetch('/api/orders', {
           method: 'POST',
           headers: { 'Content-Type': 'application/json' },
           body: JSON.stringify({
-          restaurantId: MOCK_RESTAURANTS[0].id,
-          customerName: customerName || (orderType === 'dine-in' ? `Table ${tableNumber}` : 'Walk-in'),
-          customerEmail: '',
-          customerPhone: '',
-          items: cart.map((item) => ({
-            menuItemId: item.id,
-            name: item.name,
-            quantity: item.quantity,
+            restaurantId: defaultRestaurantId || (typeof process !== 'undefined' && process.env ? process.env.NEXT_PUBLIC_DEFAULT_RESTAURANT_ID : '') || '',
+            customerName: customerName || (orderType === 'dine-in' ? `Table ${tableNumber}` : 'Walk-in'),
+            customerEmail: '',
+            customerPhone: '',
+            items: cart.map((item) => ({
+              menuItemId: item.id,
+              name: item.name,
+              quantity: item.quantity,
               price: item.finalPrice,
               customizations: item.customizations
-          })),
-          total,
-          status: 'pending',
-          orderType,
-          tableNumber: orderType === 'dine-in' ? tableNumber : null,
-            paymentStatus: paymentStatus,
+            })),
+            total,
+            status: 'pending',
+            orderType,
+            tableNumber: orderType === 'dine-in' ? tableNumber : null,
+            paymentStatus,
             squarePaymentId: paymentData.paymentId
           })
         })
 
-        // Continue even if order creation fails (for testing without backend)
         if (!orderResponse.ok) {
           warning('Order saved locally', 'Backend sync failed. Order stored offline.')
         } else {
@@ -1211,17 +1442,12 @@ export function POSSystem() {
           })
         }
       } catch (orderError) {
-        // Continue even if order API fails (for testing)
         console.warn('Order API error, continuing with local storage:', orderError)
         warning('Order saved locally', 'Could not sync to server. Order stored offline.')
       }
 
-      // Print receipt automatically after successful payment
-      setTimeout(() => {
-        printReceipt()
-      }, 500)
+      setTimeout(() => printReceipt(), 500)
 
-      // Add to orders and transactions
       const newOrder = {
         id: orderId,
         orderNumber,
@@ -1239,7 +1465,7 @@ export function POSSystem() {
         createdAt: new Date().toISOString(),
         status: 'completed'
       }
-      
+
       const newTransaction = {
         id: `txn-${Date.now()}`,
         orderId,
@@ -1255,7 +1481,7 @@ export function POSSystem() {
       setTransactions(prev => [newTransaction, ...prev])
 
       alert(`✅ Order Processed Successfully!\n\nOrder #${orderNumber}\nSubtotal (ex GST): A$${subtotalExGst.toFixed(2)}\nGST (10%): A$${totalGst.toFixed(2)}\nTotal (incl GST): A$${total.toFixed(2)}\nPayment Method: ${paymentMethod.toUpperCase()} (BYPASSED FOR TESTING)\n\nReceipt will be printed automatically.`)
-      
+
       setCart([])
       setTableNumber('')
       setCustomerName('')
@@ -1292,6 +1518,10 @@ export function POSSystem() {
           setShowPaymentModal(false)
         } else if (showDiscountModal) {
           setShowDiscountModal(false)
+        } else if (showClearConfirm) {
+          setShowClearConfirm(false)
+        } else if (showItemModal) {
+          closeItemModal()
         }
       }
       
@@ -1303,7 +1533,7 @@ export function POSSystem() {
 
     window.addEventListener('keydown', handleKeyPress)
     return () => window.removeEventListener('keydown', handleKeyPress)
-  }, [showCustomizationModal, showPaymentModal, showDiscountModal, cart])
+  }, [showCustomizationModal, showPaymentModal, showDiscountModal, showClearConfirm, showItemModal, cart])
 
   const customizationPrice = selectedItem ? calculateCustomizationPrice() : 0
   const itemPriceExGst = selectedItem ? selectedItem.basePrice + customizationPrice : 0
@@ -1313,39 +1543,87 @@ export function POSSystem() {
   // Item management functions
   const handleAddItem = () => {
     setEditingItem(null)
+    setItemFormData({
+      name: '',
+      description: '',
+      basePrice: 0,
+      image: 'https://images.unsplash.com/photo-1546069901-ba9599a7e63c?w=800&q=80',
+      isAvailable: true,
+      popular: false,
+      categoryId: categories[0]?.id ?? '',
+    })
     setShowItemModal(true)
   }
 
   const handleEditItem = (item: POSSubItem) => {
     setEditingItem(item)
+    const categoryId = categories.find((c) => c.subItems.some((s) => s.id === item.id))?.id ?? categories[0]?.id ?? ''
+    setItemFormData({
+      ...item,
+      categoryId,
+    })
     setShowItemModal(true)
   }
 
   const handleDeleteItem = (itemId: string) => {
     if (confirm('Are you sure you want to delete this item?')) {
-      // In a real app, this would update the POS_CATEGORIES
-      // For now, we'll just show a message
-      alert('Item deletion would be implemented with backend integration')
+      setCategories((prev) =>
+        prev.map((cat) => ({
+          ...cat,
+          subItems: cat.subItems.filter((s) => s.id !== itemId),
+        }))
+      )
     }
   }
 
-  const handleSaveItem = (itemData: Partial<POSSubItem>) => {
-    // In a real app, this would save to backend
-    alert('Item saved! (Backend integration needed for persistence)')
+  const handleSaveItem = (data: Partial<POSSubItem> & { categoryId?: string }) => {
+    const categoryId = data.categoryId ?? categories[0]?.id ?? ''
+    const name = (data.name ?? '').trim()
+    const description = (data.description ?? '').trim()
+    const basePrice = Number(data.basePrice) || 0
+    const image = (data.image ?? '').trim() || 'https://images.unsplash.com/photo-1546069901-ba9599a7e63c?w=800&q=80'
+    const isAvailable = data.isAvailable !== false
+    const popular = data.popular === true
+
+    if (editingItem) {
+      setCategories((prev) =>
+        prev.map((cat) => ({
+          ...cat,
+          subItems: cat.subItems.map((s) =>
+            s.id === editingItem.id
+              ? { ...s, name, description, basePrice, image, isAvailable, popular }
+              : s
+          ),
+        }))
+      )
+    } else {
+      const newItem: POSSubItem = {
+        id: `item_${Date.now()}`,
+        name,
+        description,
+        basePrice,
+        image,
+        isAvailable,
+        popular,
+      }
+      setCategories((prev) =>
+        prev.map((cat) =>
+          cat.id === categoryId
+            ? { ...cat, subItems: [...cat.subItems, newItem] }
+            : cat
+        )
+      )
+    }
     setShowItemModal(false)
     setEditingItem(null)
+    setItemFormData({})
   }
 
-  // Get all items for Items section
-  const allItems = useMemo(() => {
-    return categories.flatMap(cat => 
-      cat.subItems.map(item => ({
-        ...item,
-        categoryName: cat.name,
-        categoryId: cat.id
-      }))
-    )
-  }, [categories])
+  const closeItemModal = () => {
+    setShowItemModal(false)
+    setEditingItem(null)
+    setItemFormData({})
+  }
 
   return (
     <div className="fixed inset-0 flex flex-col bg-gray-50 overflow-hidden">
@@ -1371,9 +1649,21 @@ export function POSSystem() {
             </div>
           </div>
           <div className="flex items-center gap-3">
-            <Button variant="ghost" size="sm" onClick={clearCart} disabled={cart.length === 0}>
-              <Trash2 className="w-4 h-4 mr-1" />
-              Clear
+            <NotificationCenter className="mr-1" />
+            <Button
+              variant={cart.length > 0 ? 'danger' : 'ghost'}
+              size="sm"
+              onClick={openClearConfirm}
+              disabled={cart.length === 0}
+              title={cart.length === 0 ? 'Cart is empty' : 'Clear current order'}
+              className={cn(
+                'min-w-[200px] py-4 px-6 text-base font-semibold',
+                cart.length > 0 && 'shadow-md hover:shadow-lg',
+                cart.length === 0 && 'opacity-60 cursor-not-allowed'
+              )}
+            >
+              <Trash2 className="w-6 h-6 mr-3" />
+              Clear order
             </Button>
           </div>
         </div>
@@ -1490,10 +1780,7 @@ export function POSSystem() {
                 </div>
               )}
               <div className="grid grid-cols-2 md:grid-cols-3 lg:grid-cols-4 xl:grid-cols-5 gap-4">
-              {filteredItems.map((item) => {
-                const category = categories.find((cat) => cat.subItems.some((sub) => sub.id === item.id))
-                const Icon = category?.icon || UtensilsCrossed
-                return (
+              {filteredItems.map((item) => (
                   <div
                     key={item.id}
                     className="bg-white border-2 border-gray-200 rounded-xl overflow-hidden hover:border-orange-500 hover:shadow-xl transition-all group relative flex flex-col h-full"
@@ -1532,8 +1819,7 @@ export function POSSystem() {
                       Customize & Add
                     </button>
                   </div>
-                )
-              })}
+              ))}
               </div>
             </div>
           )}
@@ -1541,6 +1827,39 @@ export function POSSystem() {
 
         {/* Right Panel - Cart (30%) */}
         <div className="w-[30%] flex flex-col bg-gray-50 border-l-2 border-gray-200">
+          {orderIdForBilling && (
+            <div className="px-4 py-2 bg-green-100 border-b border-green-300 text-green-800 text-sm font-medium flex-shrink-0">
+              Billing for customer order — complete checkout to mark as completed.
+            </div>
+          )}
+          {/* Barcode scan - always visible for quick add */}
+          <div className="p-4 border-b border-gray-200 bg-white flex-shrink-0">
+            <label className="block text-sm font-medium text-gray-700 mb-2">
+              <ScanBarcode className="w-4 h-4 inline mr-2 text-orange-600" />
+              Scan barcode
+            </label>
+            <div className="flex gap-2">
+              <Input
+                ref={barcodeInputRef}
+                type="text"
+                placeholder="Scan or type barcode, then Enter"
+                value={barcodeScanValue}
+                onChange={(e) => setBarcodeScanValue(e.target.value)}
+                onKeyDown={handleBarcodeKeyDown}
+                className="flex-1 font-mono text-sm"
+                autoComplete="off"
+              />
+              <Button
+                variant="secondary"
+                size="sm"
+                onClick={handleBarcodeScan}
+                className="shrink-0"
+                title="Look up and add item"
+              >
+                Add
+              </Button>
+            </div>
+          </div>
           {/* Cart Items - Scrollable */}
           <div className="flex-1 overflow-y-auto p-4">
                 {cart.length === 0 ? (
@@ -1724,11 +2043,11 @@ export function POSSystem() {
           </>
         )}
 
-        {/* Orders Section */}
+        {/* Orders Section - Pending orders from customers (Restaurant Dashboard / KDS) + POS order history */}
         {activeSection === 'orders' && (
           <div className="w-full flex flex-col bg-white overflow-hidden">
             <div className="p-6 border-b border-gray-200">
-              <h2 className="text-2xl font-bold text-gray-900 mb-4">Order History</h2>
+              <h2 className="text-2xl font-bold text-gray-900 mb-4">Orders</h2>
               <div className="flex items-center gap-4">
                 <Input
                   placeholder="Search orders..."
@@ -1736,78 +2055,132 @@ export function POSSystem() {
                   value={searchQuery}
                   onChange={(e) => setSearchQuery(e.target.value)}
                 />
-                <Badge variant="info">{orders.length} orders</Badge>
+                <Badge variant="info">{pendingOrdersFromApi.length} pending</Badge>
               </div>
             </div>
-            <div className="flex-1 overflow-y-auto p-6">
-              {orders.length === 0 ? (
-                <div className="text-center py-12">
-                  <ShoppingCart className="w-16 h-16 text-gray-300 mx-auto mb-4" />
-                  <p className="text-gray-500 font-medium">No orders yet</p>
-                  <p className="text-sm text-gray-400 mt-2">Orders will appear here after payment</p>
-                </div>
-              ) : (
-                <div className="space-y-4">
-                  {orders.map((order) => (
-                    <div key={order.id} className="bg-white border-2 border-gray-200 rounded-xl p-6 shadow-sm">
-                      <div className="flex items-start justify-between mb-4">
-                        <div>
-                          <div className="flex items-center gap-3 mb-2">
-                            <h3 className="text-lg font-bold text-gray-900">Order #{order.orderNumber}</h3>
-                            <Badge variant={order.status === 'completed' ? 'success' : 'info'}>
-                              {order.status}
-                            </Badge>
+            <div className="flex-1 overflow-y-auto p-6 space-y-6">
+              <div>
+                {pendingOrdersLoading ? (
+                  <p className="text-gray-500">Loading…</p>
+                ) : pendingOrdersFromApi.length === 0 ? (
+                  <div className="text-center py-8 bg-gray-50 rounded-xl border border-gray-200">
+                    <p className="text-gray-500 font-medium">No pending orders</p>
+                    <p className="text-sm text-gray-400 mt-1">Orders accepted in Restaurant Dashboard appear here and in KDS.</p>
+                  </div>
+                ) : (
+                  <div className="space-y-4">
+                    {/* Sort: ready first (ready for billing), then preparing, accepted, pending */}
+                    {[...pendingOrdersFromApi]
+                      .sort((a, b) => {
+                        const orderStatus = (s: string) => (s === 'ready' ? 0 : s === 'preparing' ? 1 : s === 'accepted' ? 2 : 3)
+                        return orderStatus(a.status) - orderStatus(b.status)
+                      })
+                      .map((order) => (
+                      <div
+                        key={order.id}
+                        className={cn(
+                          'bg-white border-2 rounded-xl p-6 shadow-sm',
+                          order.status === 'ready' ? 'border-green-400 bg-green-50/50' : 'border-orange-200'
+                        )}
+                      >
+                        <div className="flex items-start justify-between mb-4">
+                          <div>
+                            <div className="flex items-center gap-3 mb-2 flex-wrap">
+                              <h3 className="text-lg font-bold text-gray-900">Order #{order.id.slice(-8)}</h3>
+                              <Badge variant="info" className="capitalize">{order.orderType || 'dine-in'}</Badge>
+                              {order.status === 'ready' && (
+                                <Badge variant="success">Ready for billing</Badge>
+                              )}
+                              {order.status !== 'ready' && (
+                                <Badge variant="warning" className="capitalize">{order.status}</Badge>
+                              )}
+                              {order.orderType === 'dine-in' && order.tableNumber && (
+                                <Badge variant="warning">Table {order.tableNumber}</Badge>
+                              )}
+                            </div>
+                            <p className="text-sm text-gray-600">
+                              {new Date(order.createdAt).toLocaleString('en-AU')}
+                            </p>
+                            <p className="text-sm text-gray-600">Customer: {order.customerName || '—'}</p>
+                            {order.customerPhone && (
+                              <p className="text-sm text-gray-500">{order.customerPhone}</p>
+                            )}
                           </div>
-                          <p className="text-sm text-gray-600">
-                            {new Date(order.createdAt).toLocaleString('en-AU')}
-                          </p>
-                          {order.tableNumber && (
-                            <p className="text-sm text-gray-600">Table: {order.tableNumber}</p>
-                          )}
-                          <p className="text-sm text-gray-600">Customer: {order.customerName || 'Walk-in'}</p>
-                          <p className="text-sm text-gray-600">Payment: {order.paymentMethod?.toUpperCase() || 'N/A'}</p>
+                          <div className="text-right">
+                            <p className="text-2xl font-bold text-orange-600">A${Number(order.total).toFixed(2)}</p>
+                            <p className="text-xs text-gray-500 mt-1">{order.items.length} items</p>
+                            {!['completed', 'rejected'].includes(order.status) && (
+                              <Button
+                                variant="primary"
+                                size="sm"
+                                className="mt-3 w-full sm:w-auto"
+                                onClick={() => handleProceedToBilling(order.id)}
+                              >
+                                Proceed to billing
+                              </Button>
+                            )}
+                          </div>
                         </div>
-                        <div className="text-right">
-                          <p className="text-2xl font-bold text-orange-600">A${order.total.toFixed(2)}</p>
-                          <p className="text-xs text-gray-500 mt-1">{order.items.length} items</p>
+                        <div className="border-t border-gray-200 pt-4">
+                          <div className="space-y-2">
+                            {order.items.map((item, idx) => (
+                              <div key={idx} className="flex justify-between text-sm">
+                                <span className="text-gray-700">
+                                  {item.quantity}x {item.name}
+                                </span>
+                                <span className="text-gray-600">A${(item.price * item.quantity).toFixed(2)}</span>
+                              </div>
+                            ))}
+                          </div>
                         </div>
                       </div>
-                      <div className="border-t border-gray-200 pt-4">
-                        <div className="space-y-2">
-                          {order.items.map((item: any, idx: number) => (
-                            <div key={idx} className="flex justify-between text-sm">
-                              <span className="text-gray-700">
-                                {item.quantity}x {item.name}
-                              </span>
-                              <span className="text-gray-600">A${(item.finalPrice * item.quantity).toFixed(2)}</span>
+                    ))}
+                  </div>
+                )}
+              </div>
+
+              {/* POS-created orders (completed in POS today) */}
+              {orders.length > 0 && (
+                <div>
+                  <h3 className="text-lg font-semibold text-gray-900 mb-3">Completed in POS today</h3>
+                  <div className="space-y-4">
+                    {orders.map((order: { id: string; orderNumber?: number; createdAt?: string; tableNumber?: string; customerName?: string; paymentMethod?: string; total?: number; items?: { quantity: number; name: string; finalPrice: number }[]; status?: string }) => (
+                      <div key={order.id} className="bg-white border-2 border-gray-200 rounded-xl p-6 shadow-sm">
+                        <div className="flex items-start justify-between mb-4">
+                          <div>
+                            <div className="flex items-center gap-3 mb-2">
+                              <h3 className="text-lg font-bold text-gray-900">Order #{order.orderNumber ?? order.id.slice(-8)}</h3>
+                              <Badge variant="success">{order.status ?? 'completed'}</Badge>
                             </div>
-                          ))}
+                            <p className="text-sm text-gray-600">
+                              {order.createdAt ? new Date(order.createdAt).toLocaleString('en-AU') : '—'}
+                            </p>
+                            {order.tableNumber && (
+                              <p className="text-sm text-gray-600">Table: {order.tableNumber}</p>
+                            )}
+                            <p className="text-sm text-gray-600">Customer: {order.customerName || 'Walk-in'}</p>
+                            <p className="text-sm text-gray-600">Payment: {(order.paymentMethod as string)?.toUpperCase() || 'N/A'}</p>
+                          </div>
+                          <div className="text-right">
+                            <p className="text-2xl font-bold text-orange-600">A${Number(order.total ?? 0).toFixed(2)}</p>
+                            <p className="text-xs text-gray-500 mt-1">{order.items?.length ?? 0} items</p>
+                          </div>
                         </div>
-                        <div className="mt-4 pt-4 border-t border-gray-200 space-y-1">
-                          <div className="flex justify-between text-sm text-gray-600">
-                            <span>Subtotal (ex GST):</span>
-                            <span>A${order.subtotalExGst?.toFixed(2) || '0.00'}</span>
+                        <div className="border-t border-gray-200 pt-4">
+                          <div className="space-y-2">
+                            {(order.items ?? []).map((item: { quantity: number; name: string; finalPrice: number }, idx: number) => (
+                              <div key={idx} className="flex justify-between text-sm">
+                                <span className="text-gray-700">
+                                  {item.quantity}x {item.name}
+                                </span>
+                                <span className="text-gray-600">A${(item.finalPrice * item.quantity).toFixed(2)}</span>
+                              </div>
+                            ))}
                           </div>
-                          <div className="flex justify-between text-sm text-gray-600">
-                            <span>GST (10%):</span>
-                            <span>A${order.totalGst?.toFixed(2) || '0.00'}</span>
-                          </div>
-                          {order.discount && (
-                            <div className="flex justify-between text-sm text-green-600">
-                              <span>Discount:</span>
-                              <span>-A${(order.discount.value || 0).toFixed(2)}</span>
-                            </div>
-                          )}
-                          {order.tip > 0 && (
-                            <div className="flex justify-between text-sm text-gray-600">
-                              <span>Tip:</span>
-                              <span>A${order.tip.toFixed(2)}</span>
-                            </div>
-                          )}
                         </div>
                       </div>
-                    </div>
-                  ))}
+                    ))}
+                  </div>
                 </div>
               )}
             </div>
@@ -1920,7 +2293,7 @@ export function POSSystem() {
                               onClick={() => handleEditItem(item)}
                               className="flex-1"
                             >
-                              <Check className="w-4 h-4 mr-1" />
+                              <Pencil className="w-4 h-4 mr-1" />
                               Edit
                             </Button>
                             <Button
@@ -2224,6 +2597,128 @@ export function POSSystem() {
         </DialogContent>
       </Dialog>
 
+      {/* Clear order confirmation */}
+      <Dialog open={showClearConfirm} onOpenChange={setShowClearConfirm}>
+        <DialogContent
+          title="Clear order?"
+          description={`${cart.reduce((s, i) => s + i.quantity, 0)} item(s) will be removed. Table, customer name, and notes will be reset.`}
+          onClose={() => setShowClearConfirm(false)}
+          className="max-w-sm"
+        >
+          <div className="flex flex-col gap-3 pt-2">
+            <p className="text-sm text-gray-600">
+              This cannot be undone. Start a new order after clearing.
+            </p>
+            <div className="flex gap-3 justify-end">
+              <Button variant="ghost" onClick={() => setShowClearConfirm(false)}>
+                Cancel
+              </Button>
+              <Button variant="danger" onClick={clearCart} className="min-w-[120px]">
+                <Trash2 className="w-4 h-4 mr-2" />
+                Clear order
+              </Button>
+            </div>
+          </div>
+        </DialogContent>
+      </Dialog>
+
+      {/* Add / Edit Item Modal */}
+      <Dialog open={showItemModal} onOpenChange={(open) => !open && closeItemModal()}>
+        <DialogContent
+          title={editingItem ? 'Edit Item' : 'Add Item'}
+          description={editingItem ? 'Update menu item details' : 'Add a new item to the POS menu'}
+          onClose={closeItemModal}
+          className="max-w-md"
+        >
+          <form
+            onSubmit={(e) => {
+              e.preventDefault()
+              handleSaveItem(itemFormData)
+            }}
+            className="space-y-4"
+          >
+            <div>
+              <label className="block text-sm font-medium text-gray-700 mb-1">Name *</label>
+              <Input
+                value={itemFormData.name ?? ''}
+                onChange={(e) => setItemFormData((f) => ({ ...f, name: e.target.value }))}
+                placeholder="Item name"
+                required
+              />
+            </div>
+            <div>
+              <label className="block text-sm font-medium text-gray-700 mb-1">Description</label>
+              <Input
+                value={itemFormData.description ?? ''}
+                onChange={(e) => setItemFormData((f) => ({ ...f, description: e.target.value }))}
+                placeholder="Short description"
+              />
+            </div>
+            <div>
+              <label className="block text-sm font-medium text-gray-700 mb-1">Base price (A$) *</label>
+              <Input
+                type="number"
+                step="0.01"
+                min={0}
+                value={itemFormData.basePrice ?? 0}
+                onChange={(e) => setItemFormData((f) => ({ ...f, basePrice: parseFloat(e.target.value) || 0 }))}
+                required
+              />
+            </div>
+            {!editingItem && (
+              <div>
+                <label className="block text-sm font-medium text-gray-700 mb-1">Category</label>
+                <select
+                  value={itemFormData.categoryId ?? ''}
+                  onChange={(e) => setItemFormData((f) => ({ ...f, categoryId: e.target.value }))}
+                  className="w-full rounded-md border border-gray-300 px-3 py-2 text-sm"
+                >
+                  {categories.map((c) => (
+                    <option key={c.id} value={c.id}>{c.name}</option>
+                  ))}
+                </select>
+              </div>
+            )}
+            <div>
+              <label className="block text-sm font-medium text-gray-700 mb-1">Image URL</label>
+              <Input
+                value={itemFormData.image ?? ''}
+                onChange={(e) => setItemFormData((f) => ({ ...f, image: e.target.value }))}
+                placeholder="https://..."
+              />
+            </div>
+            <div className="flex items-center gap-4">
+              <label className="flex items-center gap-2 cursor-pointer">
+                <input
+                  type="checkbox"
+                  checked={itemFormData.isAvailable !== false}
+                  onChange={(e) => setItemFormData((f) => ({ ...f, isAvailable: e.target.checked }))}
+                  className="rounded border-gray-300 text-orange-600 focus:ring-orange-500"
+                />
+                <span className="text-sm font-medium text-gray-700">Available</span>
+              </label>
+              <label className="flex items-center gap-2 cursor-pointer">
+                <input
+                  type="checkbox"
+                  checked={itemFormData.popular === true}
+                  onChange={(e) => setItemFormData((f) => ({ ...f, popular: e.target.checked }))}
+                  className="rounded border-gray-300 text-orange-600 focus:ring-orange-500"
+                />
+                <span className="text-sm font-medium text-gray-700">Popular</span>
+              </label>
+            </div>
+            <div className="flex gap-3 justify-end pt-2">
+              <Button type="button" variant="ghost" onClick={closeItemModal}>
+                Cancel
+              </Button>
+              <Button type="submit" variant="primary">
+                {editingItem ? 'Save changes' : 'Add item'}
+              </Button>
+            </div>
+          </form>
+        </DialogContent>
+      </Dialog>
+
       {/* Discount Modal */}
       <Dialog open={showDiscountModal} onOpenChange={setShowDiscountModal}>
         <DialogContent
@@ -2318,9 +2813,9 @@ export function POSSystem() {
           >
             <ShoppingCart className="w-5 h-5" />
             <span className="text-xs font-medium">Orders</span>
-            {orders.length > 0 && (
+            {(pendingOrdersFromApi.length > 0 || orders.length > 0) && (
               <Badge variant="danger" className="absolute -top-1 -right-1 text-xs px-1.5 py-0.5">
-                {orders.length}
+                {pendingOrdersFromApi.length > 0 ? pendingOrdersFromApi.length : orders.length}
               </Badge>
             )}
           </button>
