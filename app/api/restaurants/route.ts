@@ -11,6 +11,8 @@ function toRestaurant(row: {
   phone: string
   image: string | null
   location: string | null
+  latitude?: number | null
+  longitude?: number | null
   is_active: boolean
   rating: number
   review_count: number
@@ -25,6 +27,8 @@ function toRestaurant(row: {
     phone: row.phone,
     image: row.image ?? '',
     location: row.location ?? '',
+    latitude: row.latitude != null ? Number(row.latitude) : undefined,
+    longitude: row.longitude != null ? Number(row.longitude) : undefined,
     isActive: row.is_active,
     rating: Number(row.rating),
     reviewCount: Number(row.review_count),
@@ -57,7 +61,7 @@ export async function GET() {
 export async function POST(request: NextRequest) {
   try {
     const body = await request.json()
-    const { name, description, address, phone, image, location } = body
+    const { name, description, address, phone, image, location, latitude, longitude } = body
 
     if (!name || !address || !phone) {
       return NextResponse.json(
@@ -75,6 +79,9 @@ export async function POST(request: NextRequest) {
       )
     }
 
+    const lat = latitude != null && latitude !== '' ? Number(latitude) : null
+    const lng = longitude != null && longitude !== '' ? Number(longitude) : null
+
     const id = randomUUID()
     const { data, error } = await client
       .from('restaurants')
@@ -86,6 +93,8 @@ export async function POST(request: NextRequest) {
         phone: String(phone).trim(),
         image: image ? String(image).trim() : null,
         location: location ? String(location).trim() : null,
+        latitude: typeof lat === 'number' && !Number.isNaN(lat) ? lat : null,
+        longitude: typeof lng === 'number' && !Number.isNaN(lng) ? lng : null,
         is_active: true,
         rating: 0,
         review_count: 0,

@@ -14,8 +14,10 @@ import { cn } from '@/lib/utils'
 import mapboxgl from 'mapbox-gl'
 import 'mapbox-gl/dist/mapbox-gl.css'
 
-/** Map API restaurant row to Restaurant type */
-function mapApiRestaurant(row: { id: string; name: string; description: string | null; address: string; phone: string; image: string | null; location: string | null; is_active: boolean; rating: number; review_count: number }): Restaurant {
+/** Map API restaurant row to Restaurant type (API returns latitude/longitude for map) */
+function mapApiRestaurant(row: { id: string; name: string; description: string | null; address: string; phone: string; image: string | null; location: string | null; latitude?: number | null; longitude?: number | null; is_active: boolean; rating: number; review_count: number }): Restaurant {
+  const lat = row.latitude != null ? Number(row.latitude) : undefined
+  const lng = row.longitude != null ? Number(row.longitude) : undefined
   return {
     id: row.id,
     name: row.name,
@@ -27,6 +29,7 @@ function mapApiRestaurant(row: { id: string; name: string; description: string |
     rating: Number(row.rating),
     reviewCount: Number(row.review_count),
     location: row.location ?? '',
+    coordinates: lat != null && lng != null && !Number.isNaN(lat) && !Number.isNaN(lng) ? { lat, lng } : undefined,
   }
 }
 

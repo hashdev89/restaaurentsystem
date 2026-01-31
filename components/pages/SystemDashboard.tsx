@@ -42,7 +42,25 @@ import type { Notification, NotificationType } from '@/types/notification'
 
 type Section = 'overview' | 'restaurants' | 'orders' | 'settings' | 'users' | 'notifications'
 
-type RestaurantWithMeta = Restaurant & { orderCount?: number; revenueToday?: number }
+type RestaurantWithMeta = Restaurant & { orderCount?: number; revenueToday?: number; latitude?: number; longitude?: number }
+
+/** Geocode address to lat/lng via Mapbox (for map pin). */
+async function geocodeAddress(address: string): Promise<{ lat: number; lng: number } | null> {
+  const token = typeof process !== 'undefined' && process.env ? process.env.NEXT_PUBLIC_MAPBOX_TOKEN : undefined
+  if (!token?.trim()) return null
+  try {
+    const res = await fetch(
+      `https://api.mapbox.com/geocoding/v5/mapbox.places/${encodeURIComponent(address)}.json?access_token=${token}&limit=1`
+    )
+    if (!res.ok) return null
+    const data = await res.json()
+    const center = data.features?.[0]?.center
+    if (!Array.isArray(center) || center.length < 2) return null
+    return { lng: center[0], lat: center[1] }
+  } catch {
+    return null
+  }
+}
 type OrderWithRestaurantName = Order & { restaurantName?: string }
 
 const SIDEBAR_ITEMS: { id: Section; label: string; icon: React.ElementType }[] = [
@@ -69,11 +87,13 @@ export function SystemDashboard() {
     phone: '',
     image: '',
     location: '',
+    latitude: '',
+    longitude: '',
     loginEmail: '',
     loginPassword: '',
   })
   const [editingRestaurant, setEditingRestaurant] = useState<RestaurantWithMeta | null>(null)
-  const [editRestaurantForm, setEditRestaurantForm] = useState({ name: '', description: '', address: '', phone: '', image: '', location: '', loginEmail: '', loginPassword: '' })
+  const [editRestaurantForm, setEditRestaurantForm] = useState({ name: '', description: '', address: '', phone: '', image: '', location: '', latitude: '', longitude: '', loginEmail: '', loginPassword: '' })
   const [editRestaurantUser, setEditRestaurantUser] = useState<{ id: string; email: string } | null>(null)
   const [editRestaurantSaving, setEditRestaurantSaving] = useState(false)
   const [restaurantToDelete, setRestaurantToDelete] = useState<RestaurantWithMeta | null>(null)
@@ -164,6 +184,17 @@ export function SystemDashboard() {
     }
     setAddRestaurantSaving(true)
     try {
+      // Auto-fetch coordinates from address if not already set
+      let lat = addRestaurantForm.latitude ? Number(addRestaurantForm.latitude) : undefined
+      let lng = addRestaurantForm.longitude ? Number(addRestaurantForm.longitude) : undefined
+      if (address.trim() && (lat == null || lng == null || Number.isNaN(lat) || Number.isNaN(lng))) {
+        const coords = await geocodeAddress(address.trim())
+        if (coords) {
+          lat = coords.lat
+          lng = coords.lng
+        }
+      }
+
       let res: Response
       try {
         res = await fetch('/api/restaurants', {
@@ -176,6 +207,8 @@ export function SystemDashboard() {
             phone: addRestaurantForm.phone,
             image: addRestaurantForm.image,
             location: addRestaurantForm.location,
+            latitude: lat,
+            longitude: lng,
           }),
         })
       } catch (fetchErr) {
@@ -211,7 +244,7 @@ export function SystemDashboard() {
       } else {
         success('Restaurant added', `${data.restaurant?.name ?? name} has been created. Add a user (Restaurant role) in Users to enable login.`)
       }
-      setAddRestaurantForm({ name: '', description: '', address: '', phone: '', image: '', location: '', loginEmail: '', loginPassword: '' })
+      setAddRestaurantForm({ name: '', description: '', address: '', phone: '', image: '', location: '', latitude: '', longitude: '', loginEmail: '', loginPassword: '' })
       setShowAddRestaurant(false)
       const listRes = await fetch('/api/restaurants')
       const listData = await listRes.json()
@@ -228,6 +261,7 @@ export function SystemDashboard() {
 
   const openEditRestaurant = async (r: RestaurantWithMeta) => {
     setEditingRestaurant(r)
+    const rAny = r as RestaurantWithMeta & { latitude?: number; longitude?: number }
     setEditRestaurantForm({
       name: r.name,
       description: r.description ?? '',
@@ -235,6 +269,8 @@ export function SystemDashboard() {
       phone: r.phone,
       image: r.image ?? '',
       location: r.location ?? '',
+      latitude: rAny.latitude != null ? String(rAny.latitude) : '',
+      longitude: rAny.longitude != null ? String(rAny.longitude) : '',
       loginEmail: '',
       loginPassword: '',
     })
@@ -273,6 +309,8 @@ export function SystemDashboard() {
           phone: editRestaurantForm.phone,
           image: editRestaurantForm.image,
           location: editRestaurantForm.location,
+          latitude: editRestaurantForm.latitude ? Number(editRestaurantForm.latitude) : undefined,
+          longitude: editRestaurantForm.longitude ? Number(editRestaurantForm.longitude) : undefined,
         }),
       })
       if (!res.ok) throw new Error('Failed to update restaurant')
@@ -770,7 +808,16 @@ export function SystemDashboard() {
                         <Input
                           value={addRestaurantForm.address}
                           onChange={(e) => setAddRestaurantForm((f) => ({ ...f, address: e.target.value }))}
-                          placeholder="Full address"
+                          onBlur={async () => {
+                            const addr = addRestaurantForm.address?.trim()
+                            if (!addr) return
+                            const coords = await geocodeAddress(addr)
+                            if (coords) {
+                              setAddRestaurantForm((f) => ({ ...f, latitude: String(coords.lat), longitude: String(coords.lng) }))
+                              success('Coordinates fetched', 'Lat/lng set from address. Restaurant will appear on the map.')
+                            }
+                          }}
+                          placeholder="Full address (lat/lng auto-fetched when you leave this field)"
                           required
                         />
                       </div>
@@ -790,6 +837,44 @@ export function SystemDashboard() {
                           onChange={(e) => setAddRestaurantForm((f) => ({ ...f, location: e.target.value }))}
                           placeholder="e.g. Sydney, NSW"
                         />
+                      </div>
+                      <div className="flex flex-wrap gap-2 items-end">
+                        <div className="flex-1 min-w-[100px]">
+                          <label className="block text-sm font-medium text-gray-700 mb-1">Latitude (for map)</label>
+                          <Input
+                            value={addRestaurantForm.latitude}
+                            onChange={(e) => setAddRestaurantForm((f) => ({ ...f, latitude: e.target.value }))}
+                            placeholder="e.g. -33.8688"
+                          />
+                        </div>
+                        <div className="flex-1 min-w-[100px]">
+                          <label className="block text-sm font-medium text-gray-700 mb-1">Longitude (for map)</label>
+                          <Input
+                            value={addRestaurantForm.longitude}
+                            onChange={(e) => setAddRestaurantForm((f) => ({ ...f, longitude: e.target.value }))}
+                            placeholder="e.g. 151.2093"
+                          />
+                        </div>
+                        <Button
+                          type="button"
+                          variant="ghost"
+                          size="sm"
+                          className="shrink-0"
+                          onClick={async () => {
+                            const addr = addRestaurantForm.address?.trim()
+                            if (!addr) { showError('No address', 'Enter address first, then click Look up on map.') ; return }
+                            const coords = await geocodeAddress(addr)
+                            if (coords) {
+                              setAddRestaurantForm((f) => ({ ...f, latitude: String(coords.lat), longitude: String(coords.lng) }))
+                              success('Coordinates found', 'Lat/lng set from address. Restaurant will appear on the map.')
+                            } else {
+                              showError('Lookup failed', 'Could not find coordinates. Add latitude/longitude manually or set NEXT_PUBLIC_MAPBOX_TOKEN.')
+                            }
+                          }}
+                        >
+                          <MapPin className="w-4 h-4 mr-1" />
+                          Look up on map
+                        </Button>
                       </div>
                       <div>
                         <label className="block text-sm font-medium text-gray-700 mb-1">Image URL</label>
@@ -845,9 +930,52 @@ export function SystemDashboard() {
                     <form onSubmit={handleEditRestaurant} className="space-y-4">
                       <Input label="Name *" value={editRestaurantForm.name} onChange={(e) => setEditRestaurantForm((f) => ({ ...f, name: e.target.value }))} placeholder="Restaurant name" required />
                       <Input label="Description" value={editRestaurantForm.description} onChange={(e) => setEditRestaurantForm((f) => ({ ...f, description: e.target.value }))} placeholder="Short description" />
-                      <Input label="Address *" value={editRestaurantForm.address} onChange={(e) => setEditRestaurantForm((f) => ({ ...f, address: e.target.value }))} placeholder="Full address" required />
+                      <Input
+                        label="Address *"
+                        value={editRestaurantForm.address}
+                        onChange={(e) => setEditRestaurantForm((f) => ({ ...f, address: e.target.value }))}
+                        onBlur={async () => {
+                          const addr = editRestaurantForm.address?.trim()
+                          if (!addr) return
+                          const coords = await geocodeAddress(addr)
+                          if (coords) {
+                            setEditRestaurantForm((f) => ({ ...f, latitude: String(coords.lat), longitude: String(coords.lng) }))
+                            success('Coordinates fetched', 'Lat/lng set from address. Restaurant will appear on the map.')
+                          }
+                        }}
+                        placeholder="Full address (lat/lng auto-fetched when you leave this field)"
+                        required
+                      />
                       <Input label="Phone *" value={editRestaurantForm.phone} onChange={(e) => setEditRestaurantForm((f) => ({ ...f, phone: e.target.value }))} placeholder="Phone" required />
                       <Input label="Location" value={editRestaurantForm.location} onChange={(e) => setEditRestaurantForm((f) => ({ ...f, location: e.target.value }))} placeholder="e.g. Sydney, NSW" />
+                      <div className="flex flex-wrap gap-2 items-end">
+                        <div className="flex-1 min-w-[100px]">
+                          <Input label="Latitude (for map)" value={editRestaurantForm.latitude} onChange={(e) => setEditRestaurantForm((f) => ({ ...f, latitude: e.target.value }))} placeholder="e.g. -33.8688" />
+                        </div>
+                        <div className="flex-1 min-w-[100px]">
+                          <Input label="Longitude (for map)" value={editRestaurantForm.longitude} onChange={(e) => setEditRestaurantForm((f) => ({ ...f, longitude: e.target.value }))} placeholder="e.g. 151.2093" />
+                        </div>
+                        <Button
+                          type="button"
+                          variant="ghost"
+                          size="sm"
+                          className="shrink-0"
+                          onClick={async () => {
+                            const addr = editRestaurantForm.address?.trim()
+                            if (!addr) { showError('No address', 'Enter address first, then click Look up on map.') ; return }
+                            const coords = await geocodeAddress(addr)
+                            if (coords) {
+                              setEditRestaurantForm((f) => ({ ...f, latitude: String(coords.lat), longitude: String(coords.lng) }))
+                              success('Coordinates found', 'Lat/lng set from address. Restaurant will appear on the map.')
+                            } else {
+                              showError('Lookup failed', 'Could not find coordinates. Add latitude/longitude manually or set NEXT_PUBLIC_MAPBOX_TOKEN.')
+                            }
+                          }}
+                        >
+                          <MapPin className="w-4 h-4 mr-1" />
+                          Look up on map
+                        </Button>
+                      </div>
                       <Input label="Image URL" value={editRestaurantForm.image} onChange={(e) => setEditRestaurantForm((f) => ({ ...f, image: e.target.value }))} placeholder="https://…" />
                       <div className="border-t border-gray-200 pt-4 mt-4">
                         <h4 className="text-sm font-semibold text-gray-900 mb-2">Restaurant login — edit & save password</h4>

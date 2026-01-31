@@ -9,6 +9,8 @@ function toRestaurant(row: {
   phone: string
   image: string | null
   location: string | null
+  latitude?: number | null
+  longitude?: number | null
   is_active: boolean
   rating: number
   review_count: number
@@ -21,6 +23,8 @@ function toRestaurant(row: {
     phone: row.phone,
     image: row.image ?? '',
     location: row.location ?? '',
+    latitude: row.latitude != null ? Number(row.latitude) : undefined,
+    longitude: row.longitude != null ? Number(row.longitude) : undefined,
     isActive: row.is_active,
     rating: Number(row.rating),
     reviewCount: Number(row.review_count),
@@ -43,6 +47,14 @@ export async function PATCH(
     if (typeof body.image === 'string') updates.image = body.image.trim() || null
     if (typeof body.location === 'string') updates.location = body.location.trim() || null
     if (typeof body.isActive === 'boolean') updates.is_active = body.isActive
+    if (body.latitude !== undefined) {
+      const v = body.latitude === '' || body.latitude == null ? null : Number(body.latitude)
+      updates.latitude = typeof v === 'number' && !Number.isNaN(v) ? v : null
+    }
+    if (body.longitude !== undefined) {
+      const v = body.longitude === '' || body.longitude == null ? null : Number(body.longitude)
+      updates.longitude = typeof v === 'number' && !Number.isNaN(v) ? v : null
+    }
 
     if (Object.keys(updates).length === 0) {
       return NextResponse.json({ error: 'No valid fields to update' }, { status: 400 })
