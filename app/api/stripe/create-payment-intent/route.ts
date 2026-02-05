@@ -1,8 +1,17 @@
 import { NextRequest, NextResponse } from 'next/server'
-import { stripe } from '@/lib/stripe'
+import { getStripe } from '@/lib/stripe'
 
 export async function POST(request: NextRequest) {
   try {
+    let stripe
+    try {
+      stripe = getStripe()
+    } catch (e) {
+      return NextResponse.json(
+        { error: 'Stripe is not configured. Add STRIPE_SECRET_KEY to environment variables.' },
+        { status: 503 }
+      )
+    }
     const body = await request.json()
     const { amountInCents, orderId, currency = 'aud' } = body as {
       amountInCents?: number

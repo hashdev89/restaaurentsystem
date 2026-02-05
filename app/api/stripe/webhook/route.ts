@@ -1,7 +1,7 @@
 import { NextRequest, NextResponse } from 'next/server'
 import { headers } from 'next/headers'
 import Stripe from 'stripe'
-import { stripe } from '@/lib/stripe'
+import { getStripe } from '@/lib/stripe'
 import { supabase } from '@/lib/supabase'
 
 /**
@@ -24,8 +24,12 @@ export async function POST(request: NextRequest) {
   }
 
   try {
+    const stripe = getStripe()
     event = stripe.webhooks.constructEvent(body, signature, webhookSecret)
-  } catch (err) {
+  } catch (err: unknown) {
+    if (err instanceof Error && err.message.includes('STRIPE_SECRET_KEY')) {
+      return NextResponse.json({ error: 'Stripe not configured' }, { status: 503 })
+    }
     const msg = err instanceof Error ? err.message : 'Unknown error'
     console.error('Stripe webhook signature verification failed:', msg)
     return NextResponse.json({ error: `Webhook Error: ${msg}` }, { status: 400 })
