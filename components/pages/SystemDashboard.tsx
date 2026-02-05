@@ -31,8 +31,11 @@ import {
   Info,
   Check,
   Trash2,
+  Headphones,
+  MessageSquare,
 } from 'lucide-react'
 import { Button } from '../ui/Button'
+import { Badge } from '../ui/Badge'
 import { Card } from '../ui/Card'
 import { Input } from '../ui/Input'
 import { useNotification } from '../providers/NotificationProvider'
@@ -40,7 +43,7 @@ import { normalizeOrders } from '@/lib/orders'
 import type { Restaurant, Order } from '@/types'
 import type { Notification, NotificationType } from '@/types/notification'
 
-type Section = 'overview' | 'restaurants' | 'orders' | 'settings' | 'users' | 'notifications'
+type Section = 'overview' | 'restaurants' | 'orders' | 'settings' | 'users' | 'notifications' | 'support'
 
 type RestaurantWithMeta = Restaurant & { orderCount?: number; revenueToday?: number; latitude?: number; longitude?: number }
 
@@ -66,6 +69,7 @@ type OrderWithRestaurantName = Order & { restaurantName?: string }
 const SIDEBAR_ITEMS: { id: Section; label: string; icon: React.ElementType }[] = [
   { id: 'overview', label: 'Overview', icon: LayoutDashboard },
   { id: 'notifications', label: 'Notifications', icon: Bell },
+  { id: 'support', label: 'Support (Help desk)', icon: Headphones },
   { id: 'restaurants', label: 'Restaurants', icon: Store },
   { id: 'orders', label: 'All Orders', icon: Package },
   { id: 'settings', label: 'System Settings', icon: Settings },
@@ -93,7 +97,7 @@ export function SystemDashboard() {
     loginPassword: '',
   })
   const [editingRestaurant, setEditingRestaurant] = useState<RestaurantWithMeta | null>(null)
-  const [editRestaurantForm, setEditRestaurantForm] = useState({ name: '', description: '', address: '', phone: '', image: '', location: '', latitude: '', longitude: '', loginEmail: '', loginPassword: '' })
+  const [editRestaurantForm, setEditRestaurantForm] = useState({ name: '', description: '', address: '', phone: '', image: '', location: '', latitude: '', longitude: '', loginEmail: '', loginPassword: '', posEnabled: true, kdsEnabled: true, posPinRequired: false, kdsPinRequired: false })
   const [editRestaurantUser, setEditRestaurantUser] = useState<{ id: string; email: string } | null>(null)
   const [editRestaurantSaving, setEditRestaurantSaving] = useState(false)
   const [restaurantToDelete, setRestaurantToDelete] = useState<RestaurantWithMeta | null>(null)
@@ -105,6 +109,8 @@ export function SystemDashboard() {
   const [addUserForm, setAddUserForm] = useState<{ email: string; name: string; role: 'customer' | 'restaurant' | 'admin'; restaurantId: string }>({ email: '', name: '', role: 'customer', restaurantId: '' })
   const [settingsLoading, setSettingsLoading] = useState(true)
   const [settingsSaving, setSettingsSaving] = useState(false)
+  const [supportMessages, setSupportMessages] = useState<{ id: string; source: string; type: string; message: string; createdAt: string; status: string }[]>([])
+  const [supportLoading, setSupportLoading] = useState(false)
   const { success, error: showError, notifications, unreadCount, markAllAsRead, markAsRead, remove } = useNotification()
 
   useEffect(() => {
@@ -273,6 +279,10 @@ export function SystemDashboard() {
       longitude: rAny.longitude != null ? String(rAny.longitude) : '',
       loginEmail: '',
       loginPassword: '',
+      posEnabled: r.posEnabled !== false,
+      kdsEnabled: r.kdsEnabled !== false,
+      posPinRequired: r.posPinRequired === true,
+      kdsPinRequired: r.kdsPinRequired === true,
     })
     setEditRestaurantUser(null)
     try {
@@ -311,6 +321,10 @@ export function SystemDashboard() {
           location: editRestaurantForm.location,
           latitude: editRestaurantForm.latitude ? Number(editRestaurantForm.latitude) : undefined,
           longitude: editRestaurantForm.longitude ? Number(editRestaurantForm.longitude) : undefined,
+          posEnabled: editRestaurantForm.posEnabled,
+          kdsEnabled: editRestaurantForm.kdsEnabled,
+          posPinRequired: editRestaurantForm.posPinRequired,
+          kdsPinRequired: editRestaurantForm.kdsPinRequired,
         }),
       })
       if (!res.ok) throw new Error('Failed to update restaurant')
@@ -440,7 +454,7 @@ export function SystemDashboard() {
 
   // System settings state
   const [settings, setSettings] = useState({
-    businessName: 'RestaurantHub',
+    businessName: 'EasyMenu',
     taxRate: 10,
     currency: 'AUD',
     timezone: 'Australia/Sydney',
@@ -475,6 +489,27 @@ export function SystemDashboard() {
     return () => { cancelled = true }
   }, [])
 
+  useEffect(() => {
+    if (section !== 'support') return
+    let cancelled = false
+    setSupportLoading(true)
+    fetch('/api/support')
+      .then((res) => res.ok ? res.json() : { messages: [] })
+      .then((data) => {
+        if (!cancelled && data.messages) setSupportMessages(data.messages)
+      })
+      .catch(() => { if (!cancelled) setSupportMessages([]) })
+      .finally(() => { if (!cancelled) setSupportLoading(false) })
+    return () => { cancelled = true }
+  }, [section])
+
+  const markSupportRead = async (id: string) => {
+    try {
+      await fetch('/api/support', { method: 'PATCH', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ id, status: 'read' }) })
+      setSupportMessages((prev) => prev.map((m) => (m.id === id ? { ...m, status: 'read' } : m)))
+    } catch (_) { /* ignore */ }
+  }
+
   const saveSettings = async () => {
     setSettingsSaving(true)
     try {
@@ -497,6 +532,22 @@ export function SystemDashboard() {
   const totalRevenueToday = restaurants.reduce((sum, r) => sum + (r.revenueToday ?? 0), 0)
   const totalOrdersToday = restaurants.reduce((sum, r) => sum + (r.orderCount ?? 0), 0)
   const pendingOrdersCount = ordersWithNames.filter((o) => o.status === 'pending').length
+
+  // Close any open modals when switching section so overlay never gets stuck
+  useEffect(() => {
+    setShowAddRestaurant(false)
+    setEditingRestaurant(null)
+    setRestaurantToDelete(null)
+    setShowAddUser(false)
+  }, [section])
+
+  // Clear modal state on mount so no overlay appears on first load
+  useEffect(() => {
+    setShowAddRestaurant(false)
+    setEditingRestaurant(null)
+    setRestaurantToDelete(null)
+    setShowAddUser(false)
+  }, [])
 
   return (
     <div className="min-h-screen bg-gray-50 flex">
@@ -547,6 +598,7 @@ export function SystemDashboard() {
             <p className="text-sm text-gray-500 mt-0.5">
               {section === 'overview' && 'Platform overview and key metrics'}
               {section === 'notifications' && 'Restaurant, POS, customer errors, updates, and connection issues'}
+              {section === 'support' && 'Messages from POS Support (issues & technical help)'}
               {section === 'restaurants' && 'Manage all restaurants on the platform'}
               {section === 'orders' && 'View and filter orders across all restaurants'}
               {section === 'settings' && 'System-wide settings and integrations'}
@@ -661,6 +713,49 @@ export function SystemDashboard() {
             </div>
           )}
 
+          {/* Support (Help desk) - messages from POS */}
+          {section === 'support' && (
+            <div className="space-y-4">
+              <p className="text-gray-600">Messages sent from POS Support (issues and technical help). Reply or resolve from here.</p>
+              {supportLoading ? (
+                <p className="text-gray-500">Loading messages…</p>
+              ) : supportMessages.length === 0 ? (
+                <Card className="p-8 text-center">
+                  <MessageSquare className="w-12 h-12 mx-auto text-gray-300 mb-3" />
+                  <p className="text-gray-600 font-medium">No support messages yet</p>
+                  <p className="text-sm text-gray-500 mt-1">Messages from POS → Support appear here.</p>
+                </Card>
+              ) : (
+                <div className="space-y-3">
+                  {supportMessages.map((m) => (
+                    <Card key={m.id} className={`p-4 ${m.status === 'new' ? 'border-l-4 border-orange-500' : ''}`}>
+                      <div className="flex items-start justify-between gap-4">
+                        <div className="flex-1 min-w-0">
+                          <div className="flex items-center gap-2 flex-wrap mb-2">
+                            <Badge variant={m.type === 'technical' ? 'info' : 'warning'} className="text-xs">
+                              {m.type === 'technical' ? 'Technical help' : 'Issue'}
+                            </Badge>
+                            <span className="text-xs text-gray-500">from {m.source}</span>
+                            <span className="text-xs text-gray-500">{new Date(m.createdAt).toLocaleString()}</span>
+                            {m.status === 'new' && (
+                              <span className="text-xs font-medium text-orange-600">New</span>
+                            )}
+                          </div>
+                          <p className="text-gray-900 whitespace-pre-wrap">{m.message}</p>
+                        </div>
+                        {m.status === 'new' && (
+                          <Button variant="ghost" size="sm" onClick={() => markSupportRead(m.id)}>
+                            Mark read
+                          </Button>
+                        )}
+                      </div>
+                    </Card>
+                  ))}
+                </div>
+              )}
+            </div>
+          )}
+
           {/* Restaurants */}
           {section === 'restaurants' && (
             <div className="space-y-4">
@@ -684,52 +779,52 @@ export function SystemDashboard() {
                   </Button>
                 </Card>
               ) : (
-                <Card className="overflow-hidden">
-                  <div className="overflow-x-auto">
-                    <table className="min-w-full divide-y divide-gray-200">
-                      <thead className="bg-gray-50">
-                        <tr>
-                          <th className="px-4 py-3 text-left text-xs font-medium text-gray-500 uppercase">Restaurant</th>
-                          <th className="px-4 py-3 text-left text-xs font-medium text-gray-500 uppercase">Location</th>
-                          <th className="px-4 py-3 text-left text-xs font-medium text-gray-500 uppercase">Orders</th>
-                          <th className="px-4 py-3 text-left text-xs font-medium text-gray-500 uppercase">Status</th>
-                          <th className="px-4 py-3 text-right text-xs font-medium text-gray-500 uppercase">Actions</th>
-                        </tr>
-                      </thead>
-                      <tbody className="bg-white divide-y divide-gray-200">
-                        {restaurants.map((r) => (
-                          <tr key={r.id}>
-                            <td className="px-4 py-3">
-                              <div className="flex items-center gap-3">
+              <Card className="overflow-hidden">
+                <div className="overflow-x-auto">
+                  <table className="min-w-full divide-y divide-gray-200">
+                    <thead className="bg-gray-50">
+                      <tr>
+                        <th className="px-4 py-3 text-left text-xs font-medium text-gray-500 uppercase">Restaurant</th>
+                        <th className="px-4 py-3 text-left text-xs font-medium text-gray-500 uppercase">Location</th>
+                        <th className="px-4 py-3 text-left text-xs font-medium text-gray-500 uppercase">Orders</th>
+                        <th className="px-4 py-3 text-left text-xs font-medium text-gray-500 uppercase">Status</th>
+                        <th className="px-4 py-3 text-right text-xs font-medium text-gray-500 uppercase">Actions</th>
+                      </tr>
+                    </thead>
+                    <tbody className="bg-white divide-y divide-gray-200">
+                      {restaurants.map((r) => (
+                        <tr key={r.id}>
+                          <td className="px-4 py-3">
+                            <div className="flex items-center gap-3">
                                 {r.image ? (
-                                  <img src={r.image} alt="" className="w-10 h-10 rounded-md object-cover" />
+                              <img src={r.image} alt="" className="w-10 h-10 rounded-md object-cover" />
                                 ) : (
                                   <div className="w-10 h-10 rounded-md bg-gray-200 flex items-center justify-center text-gray-500 font-medium">
                                     {r.name.charAt(0).toUpperCase()}
                                   </div>
                                 )}
-                                <div>
-                                  <p className="font-medium text-gray-900">{r.name}</p>
+                              <div>
+                                <p className="font-medium text-gray-900">{r.name}</p>
                                   <p className="text-sm text-gray-500 truncate max-w-xs">{r.description || '—'}</p>
-                                </div>
                               </div>
-                            </td>
+                            </div>
+                          </td>
                             <td className="px-4 py-3 text-sm text-gray-600">{r.location || '—'}</td>
-                            <td className="px-4 py-3 text-sm text-gray-600">{r.orderCount ?? 0}</td>
-                            <td className="px-4 py-3">
-                              <span
-                                className={`inline-flex px-2 py-1 text-xs font-medium rounded-full ${
-                                  r.isActive ? 'bg-green-100 text-green-800' : 'bg-gray-100 text-gray-600'
-                                }`}
-                              >
-                                {r.isActive ? 'Active' : 'Paused'}
-                              </span>
-                            </td>
-                            <td className="px-4 py-3 text-right">
+                          <td className="px-4 py-3 text-sm text-gray-600">{r.orderCount ?? 0}</td>
+                          <td className="px-4 py-3">
+                            <span
+                              className={`inline-flex px-2 py-1 text-xs font-medium rounded-full ${
+                                r.isActive ? 'bg-green-100 text-green-800' : 'bg-gray-100 text-gray-600'
+                              }`}
+                            >
+                              {r.isActive ? 'Active' : 'Paused'}
+                            </span>
+                          </td>
+                          <td className="px-4 py-3 text-right">
                               <div className="flex items-center justify-end gap-2 flex-wrap">
-                                <Button
-                                  variant="ghost"
-                                  size="sm"
+                              <Button
+                                variant="ghost"
+                                size="sm"
                                   onClick={() => openEditRestaurant(r)}
                                   title="Edit restaurant and login"
                                   className="text-orange-600 hover:text-orange-700"
@@ -751,34 +846,35 @@ export function SystemDashboard() {
                                   variant="ghost"
                                   size="sm"
                                   onClick={() => toggleRestaurantActive(r)}
-                                  title={r.isActive ? 'Pause' : 'Activate'}
-                                >
-                                  {r.isActive ? <Pause className="w-4 h-4" /> : <Play className="w-4 h-4" />}
+                                title={r.isActive ? 'Pause' : 'Activate'}
+                              >
+                                {r.isActive ? <Pause className="w-4 h-4" /> : <Play className="w-4 h-4" />}
+                              </Button>
+                              <Link href={`/restaurant/${r.id}`} target="_blank" rel="noopener">
+                                <Button variant="ghost" size="sm" title="View public page">
+                                  <ExternalLink className="w-4 h-4" />
                                 </Button>
-                                <Link href={`/restaurant/${r.id}`} target="_blank" rel="noopener">
-                                  <Button variant="ghost" size="sm" title="View public page">
-                                    <ExternalLink className="w-4 h-4" />
-                                  </Button>
-                                </Link>
+                              </Link>
                                 <Link href={`/restaurant/${r.id}/dashboard`}>
-                                  <Button variant="ghost" size="sm" title="Restaurant dashboard">
-                                    <LayoutDashboard className="w-4 h-4" />
-                                  </Button>
-                                </Link>
-                              </div>
-                            </td>
-                          </tr>
-                        ))}
-                      </tbody>
-                    </table>
-                  </div>
-                </Card>
+                                <Button variant="ghost" size="sm" title="Restaurant dashboard">
+                                  <LayoutDashboard className="w-4 h-4" />
+                                </Button>
+                              </Link>
+                            </div>
+                          </td>
+                        </tr>
+                      ))}
+                    </tbody>
+                  </table>
+                </div>
+              </Card>
               )}
 
-              {/* Add Restaurant modal */}
-              {showAddRestaurant && (
-                <div className="fixed inset-0 z-50 flex items-center justify-center p-4 bg-black/50">
-                  <Card className="w-full max-w-md p-6 max-h-[90vh] overflow-y-auto">
+              {/* Add Restaurant modal - only show when on restaurants section */}
+              {section === 'restaurants' && showAddRestaurant && (
+                <div className="fixed inset-0 z-50 flex items-center justify-center p-4 bg-black/50" onClick={() => setShowAddRestaurant(false)} role="presentation">
+                  <div onClick={(e) => e.stopPropagation()}>
+                    <Card className="w-full max-w-md p-6 max-h-[90vh] overflow-y-auto">
                     <div className="flex justify-between items-center mb-4">
                       <h3 className="text-lg font-semibold text-gray-900">Add Restaurant</h3>
                       <button type="button" onClick={() => setShowAddRestaurant(false)} className="p-1 rounded hover:bg-gray-100" aria-label="Close">
@@ -888,6 +984,7 @@ export function SystemDashboard() {
                         <h4 className="text-sm font-semibold text-gray-900 mb-2">Restaurant login (optional)</h4>
                         <p className="text-xs text-gray-500 mb-2">Create login so staff can sign in to this restaurant&apos;s dashboard.</p>
                         <div className="space-y-2">
+                          <p className="text-xs text-gray-500">This username and password grant access to this restaurant’s Dashboard, POS, and Kitchen (KDS). Staff sign in at Restaurant Login with this email and password.</p>
                           <Input
                             label="Login email"
                             type="email"
@@ -914,13 +1011,15 @@ export function SystemDashboard() {
                       </div>
                     </form>
                   </Card>
+                  </div>
                 </div>
               )}
 
-              {/* Edit Restaurant modal */}
-              {editingRestaurant && (
-                <div className="fixed inset-0 z-50 flex items-center justify-center p-4 bg-black/50">
-                  <Card className="w-full max-w-md p-6 max-h-[90vh] overflow-y-auto">
+              {/* Edit Restaurant modal - only show when on restaurants section */}
+              {section === 'restaurants' && editingRestaurant && (
+                <div className="fixed inset-0 z-50 flex items-center justify-center p-4 bg-black/50" onClick={() => setEditingRestaurant(null)} role="presentation">
+                  <div onClick={(e) => e.stopPropagation()}>
+                    <Card className="w-full max-w-md p-6 max-h-[90vh] overflow-y-auto">
                     <div className="flex justify-between items-center mb-4">
                       <h3 className="text-lg font-semibold text-gray-900">Edit Restaurant & Login</h3>
                       <button type="button" onClick={() => setEditingRestaurant(null)} className="p-1 rounded hover:bg-gray-100" aria-label="Close">
@@ -978,11 +1077,12 @@ export function SystemDashboard() {
                       </div>
                       <Input label="Image URL" value={editRestaurantForm.image} onChange={(e) => setEditRestaurantForm((f) => ({ ...f, image: e.target.value }))} placeholder="https://…" />
                       <div className="border-t border-gray-200 pt-4 mt-4">
-                        <h4 className="text-sm font-semibold text-gray-900 mb-2">Restaurant login — edit & save password</h4>
+                        <h4 className="text-sm font-semibold text-gray-900 mb-2">Restaurant login (Dashboard, POS, Kitchen)</h4>
+                        <p className="text-xs text-gray-500 mb-2">This username and password work for this restaurant’s Dashboard, POS, and Kitchen (KDS). Staff sign in at Restaurant Login.</p>
                         {editRestaurantUser ? (
                           <>
                             <p className="text-xs text-gray-500 mb-2">Login email: <strong>{editRestaurantUser.email}</strong></p>
-                            <p className="text-xs text-gray-500 mb-2">Set a new password below and click Save to update. Staff use this to sign in at Restaurant Login.</p>
+                            <p className="text-xs text-gray-500 mb-2">Set a new password below and click Save to update.</p>
                             <Input label="New password (min 8 characters — leave blank to keep current)" type="password" value={editRestaurantForm.loginPassword} onChange={(e) => setEditRestaurantForm((f) => ({ ...f, loginPassword: e.target.value }))} placeholder="••••••••" autoComplete="new-password" />
                           </>
                         ) : (
@@ -993,6 +1093,28 @@ export function SystemDashboard() {
                           </>
                         )}
                       </div>
+                      <div className="border-t border-gray-200 pt-4 mt-4">
+                        <h4 className="text-sm font-semibold text-gray-900 mb-2">POS & KDS access</h4>
+                        <p className="text-xs text-gray-500 mb-3">Turn POS or Kitchen (KDS) on/off for this restaurant. When PIN is required, staff enter a 4-digit PIN (set in Restaurant Dashboard → Access).</p>
+                        <div className="space-y-2">
+                          <label className="flex items-center gap-2 cursor-pointer">
+                            <input type="checkbox" checked={editRestaurantForm.posEnabled} onChange={(e) => setEditRestaurantForm((f) => ({ ...f, posEnabled: e.target.checked }))} className="rounded border-gray-300 text-orange-600 focus:ring-orange-500" />
+                            <span className="text-sm font-medium text-gray-700">POS enabled</span>
+                          </label>
+                          <label className="flex items-center gap-2 cursor-pointer">
+                            <input type="checkbox" checked={editRestaurantForm.posPinRequired} onChange={(e) => setEditRestaurantForm((f) => ({ ...f, posPinRequired: e.target.checked }))} className="rounded border-gray-300 text-orange-600 focus:ring-orange-500" />
+                            <span className="text-sm font-medium text-gray-700">Require 4-digit PIN for POS</span>
+                          </label>
+                          <label className="flex items-center gap-2 cursor-pointer">
+                            <input type="checkbox" checked={editRestaurantForm.kdsEnabled} onChange={(e) => setEditRestaurantForm((f) => ({ ...f, kdsEnabled: e.target.checked }))} className="rounded border-gray-300 text-orange-600 focus:ring-orange-500" />
+                            <span className="text-sm font-medium text-gray-700">KDS (Kitchen) enabled</span>
+                          </label>
+                          <label className="flex items-center gap-2 cursor-pointer">
+                            <input type="checkbox" checked={editRestaurantForm.kdsPinRequired} onChange={(e) => setEditRestaurantForm((f) => ({ ...f, kdsPinRequired: e.target.checked }))} className="rounded border-gray-300 text-orange-600 focus:ring-orange-500" />
+                            <span className="text-sm font-medium text-gray-700">Require 4-digit PIN for KDS</span>
+                          </label>
+                        </div>
+                      </div>
                       <div className="flex gap-2 pt-2">
                         <Button type="submit" className="bg-orange-600 hover:bg-orange-700" disabled={editRestaurantSaving}>
                           {editRestaurantSaving ? 'Saving…' : 'Save'}
@@ -1001,13 +1123,15 @@ export function SystemDashboard() {
                       </div>
                     </form>
                   </Card>
+                  </div>
                 </div>
               )}
 
               {/* Delete Restaurant confirmation */}
               {restaurantToDelete && (
-                <div className="fixed inset-0 z-50 flex items-center justify-center p-4 bg-black/50">
-                  <Card className="w-full max-w-md p-6">
+                <div className="fixed inset-0 z-50 flex items-center justify-center p-4 bg-black/50" onClick={() => setRestaurantToDelete(null)} role="presentation">
+                  <div onClick={(e) => e.stopPropagation()}>
+                    <Card className="w-full max-w-md p-6">
                     <h3 className="text-lg font-semibold text-gray-900 mb-2">Delete restaurant?</h3>
                     <p className="text-gray-600 text-sm mb-4">
                       <strong>{restaurantToDelete.name}</strong> will be permanently removed. This will also remove its menu items, tables, and related data. This cannot be undone.
@@ -1021,6 +1145,7 @@ export function SystemDashboard() {
                       </Button>
                     </div>
                   </Card>
+                  </div>
                 </div>
               )}
             </div>
@@ -1035,43 +1160,43 @@ export function SystemDashboard() {
               ) : ordersWithNames.length === 0 ? (
                 <Card className="p-8 text-center text-gray-500">No orders yet. Orders appear here after customers checkout.</Card>
               ) : (
-                <Card className="overflow-hidden">
-                  <div className="overflow-x-auto">
-                    <table className="min-w-full divide-y divide-gray-200">
-                      <thead className="bg-gray-50">
-                        <tr>
-                          <th className="px-4 py-3 text-left text-xs font-medium text-gray-500 uppercase">Order</th>
-                          <th className="px-4 py-3 text-left text-xs font-medium text-gray-500 uppercase">Restaurant</th>
-                          <th className="px-4 py-3 text-left text-xs font-medium text-gray-500 uppercase">Customer</th>
-                          <th className="px-4 py-3 text-left text-xs font-medium text-gray-500 uppercase">Total</th>
-                          <th className="px-4 py-3 text-left text-xs font-medium text-gray-500 uppercase">Status</th>
-                        </tr>
-                      </thead>
-                      <tbody className="bg-white divide-y divide-gray-200">
+              <Card className="overflow-hidden">
+                <div className="overflow-x-auto">
+                  <table className="min-w-full divide-y divide-gray-200">
+                    <thead className="bg-gray-50">
+                      <tr>
+                        <th className="px-4 py-3 text-left text-xs font-medium text-gray-500 uppercase">Order</th>
+                        <th className="px-4 py-3 text-left text-xs font-medium text-gray-500 uppercase">Restaurant</th>
+                        <th className="px-4 py-3 text-left text-xs font-medium text-gray-500 uppercase">Customer</th>
+                        <th className="px-4 py-3 text-left text-xs font-medium text-gray-500 uppercase">Total</th>
+                        <th className="px-4 py-3 text-left text-xs font-medium text-gray-500 uppercase">Status</th>
+                      </tr>
+                    </thead>
+                    <tbody className="bg-white divide-y divide-gray-200">
                         {ordersWithNames.map((o) => (
-                          <tr key={o.id}>
-                            <td className="px-4 py-3">
+                        <tr key={o.id}>
+                          <td className="px-4 py-3">
                               <p className="font-mono text-sm font-medium text-gray-900 truncate max-w-[140px]" title={o.id}>{o.id}</p>
                               <p className="text-xs text-gray-500">{o.createdAt ? new Date(o.createdAt).toLocaleString() : '—'}</p>
-                            </td>
-                            <td className="px-4 py-3 text-sm text-gray-600">{o.restaurantName ?? o.restaurantId}</td>
-                            <td className="px-4 py-3 text-sm text-gray-600">{o.customerName}</td>
+                          </td>
+                          <td className="px-4 py-3 text-sm text-gray-600">{o.restaurantName ?? o.restaurantId}</td>
+                          <td className="px-4 py-3 text-sm text-gray-600">{o.customerName}</td>
                             <td className="px-4 py-3 text-sm font-medium text-gray-900">${Number(o.total).toFixed(2)}</td>
-                            <td className="px-4 py-3">
-                              <span
-                                className={`inline-flex px-2 py-1 text-xs font-medium rounded-full ${
-                                  o.status === 'pending' ? 'bg-amber-100 text-amber-800' : 'bg-green-100 text-green-800'
-                                }`}
-                              >
-                                {o.status}
-                              </span>
-                            </td>
-                          </tr>
-                        ))}
-                      </tbody>
-                    </table>
-                  </div>
-                </Card>
+                          <td className="px-4 py-3">
+                            <span
+                              className={`inline-flex px-2 py-1 text-xs font-medium rounded-full ${
+                                o.status === 'pending' ? 'bg-amber-100 text-amber-800' : 'bg-green-100 text-green-800'
+                              }`}
+                            >
+                              {o.status}
+                            </span>
+                          </td>
+                        </tr>
+                      ))}
+                    </tbody>
+                  </table>
+                </div>
+              </Card>
               )}
             </div>
           )}
@@ -1094,7 +1219,7 @@ export function SystemDashboard() {
                     <Input
                       value={settings.businessName}
                       onChange={(e) => setSettings((s) => ({ ...s, businessName: e.target.value }))}
-                      placeholder="RestaurantHub"
+                      placeholder="EasyMenu"
                     />
                   </div>
                   <div className="grid grid-cols-2 gap-4">
@@ -1208,42 +1333,45 @@ export function SystemDashboard() {
                 ) : users.length === 0 ? (
                   <p className="text-gray-500 py-4">No users yet. Add a user to get started.</p>
                 ) : (
-                  <div className="border border-gray-200 rounded-lg overflow-hidden">
-                    <table className="min-w-full divide-y divide-gray-200">
-                      <thead className="bg-gray-50">
-                        <tr>
-                          <th className="px-4 py-3 text-left text-xs font-medium text-gray-500 uppercase">Name / Email</th>
-                          <th className="px-4 py-3 text-left text-xs font-medium text-gray-500 uppercase">Role</th>
+                <div className="border border-gray-200 rounded-lg overflow-hidden">
+                  <table className="min-w-full divide-y divide-gray-200">
+                    <thead className="bg-gray-50">
+                      <tr>
+                        <th className="px-4 py-3 text-left text-xs font-medium text-gray-500 uppercase">Name / Email</th>
+                        <th className="px-4 py-3 text-left text-xs font-medium text-gray-500 uppercase">Role</th>
                           <th className="px-4 py-3 text-left text-xs font-medium text-gray-500 uppercase">Restaurant</th>
-                          <th className="px-4 py-3 text-right text-xs font-medium text-gray-500 uppercase">Actions</th>
-                        </tr>
-                      </thead>
-                      <tbody className="bg-white divide-y divide-gray-200">
+                        <th className="px-4 py-3 text-right text-xs font-medium text-gray-500 uppercase">Actions</th>
+                      </tr>
+                    </thead>
+                    <tbody className="bg-white divide-y divide-gray-200">
                         {users.map((u) => (
                           <tr key={u.id}>
-                            <td className="px-4 py-3">
+                        <td className="px-4 py-3">
                               <p className="font-medium text-gray-900">{u.name || '—'}</p>
                               <p className="text-sm text-gray-500">{u.email}</p>
-                            </td>
-                            <td className="px-4 py-3">
+                        </td>
+                        <td className="px-4 py-3">
                               <span className="inline-flex px-2 py-1 text-xs font-medium rounded-full bg-gray-100 text-gray-800 capitalize">{u.role}</span>
                             </td>
                             <td className="px-4 py-3 text-sm text-gray-600">
                               {u.restaurantId ? restaurantById[u.restaurantId]?.name ?? u.restaurantId : '—'}
-                            </td>
-                            <td className="px-4 py-3 text-right">
+                        </td>
+                        <td className="px-4 py-3 text-right">
                               <Button variant="ghost" size="sm" title="Edit (coming soon)"><Edit className="w-4 h-4" /></Button>
-                            </td>
-                          </tr>
+                        </td>
+                      </tr>
                         ))}
-                      </tbody>
-                    </table>
-                  </div>
+                    </tbody>
+                  </table>
+                </div>
                 )}
+              </Card>
 
-                {showAddUser && (
-                  <div className="fixed inset-0 z-50 flex items-center justify-center p-4 bg-black/50">
-                    <Card className="w-full max-w-md p-6">
+                {/* Add User modal - only show when on users section */}
+                {section === 'users' && showAddUser && (
+                  <div className="fixed inset-0 z-50 flex items-center justify-center p-4 bg-black/50" onClick={() => setShowAddUser(false)} role="presentation">
+                    <div onClick={(e) => e.stopPropagation()}>
+                      <Card className="w-full max-w-md p-6">
                       <div className="flex justify-between items-center mb-4">
                         <h3 className="text-lg font-semibold text-gray-900">Add User</h3>
                         <button type="button" onClick={() => setShowAddUser(false)} className="p-1 rounded hover:bg-gray-100" aria-label="Close">
@@ -1303,10 +1431,10 @@ export function SystemDashboard() {
                       </form>
                     </Card>
                   </div>
+                </div>
                 )}
-              </Card>
-            </div>
-          )}
+              </div>
+            )}
         </div>
       </main>
     </div>

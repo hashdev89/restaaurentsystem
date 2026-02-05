@@ -6,8 +6,8 @@ import { Navigation } from '@/components/Navigation'
 import { NotificationToasts } from '@/components/NotificationToasts'
 
 export const metadata: Metadata = {
-  title: 'Restaurant Ordering System',
-  description: 'Order food from your favorite restaurants',
+  title: 'EasyMenu - Search Easy & Order Easy',
+  description: 'Search Easy & Order Easy. Order food from your favorite restaurants.',
 }
 
 export default function RootLayout({

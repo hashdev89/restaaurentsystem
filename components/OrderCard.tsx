@@ -1,7 +1,27 @@
 'use client'
 
 import { Check, X, Clock } from 'lucide-react'
-import { Order } from '@/types'
+import { Order, MenuItemCustomizationGroup } from '@/types'
+import { priceInclGst, GST_RATE } from '@/lib/gst'
+
+function ItemCustomizations({ customizations }: { customizations?: MenuItemCustomizationGroup[] }) {
+  if (!customizations?.length) return null
+  return (
+    <div className="text-xs text-gray-500 mt-0.5 space-y-0.5 ml-4">
+      {customizations.map((g) => {
+        const opts = (g.options || []).map((o) => o.name).filter(Boolean).join(', ')
+        if (!opts) return null
+        if ((g.type || '').toLowerCase() === 'remove') {
+          return <div key={g.id}>Remove: {opts}</div>
+        }
+        const pricePart = (g.options || []).some((o) => Number(o?.price) > 0)
+          ? ` (+${(g.options || []).reduce((s, o) => s + Number(o?.price || 0), 0).toFixed(2)} each)`
+          : ''
+        return <div key={g.id}>Extras: {opts}{pricePart}</div>
+      })}
+    </div>
+  )
+}
 import { Card } from './ui/Card'
 import { Badge } from './ui/Badge'
 import { Button } from './ui/Button'
@@ -14,6 +34,8 @@ interface OrderCardProps {
 }
 
 export function OrderCard({ order, onAccept, onReject, onProceedToBilling }: OrderCardProps) {
+  const subtotalInclGst = Math.max(0, order.total - 1)
+  const gstIncluded = subtotalInclGst * (GST_RATE / (1 + GST_RATE))
   const statusVariant = {
     pending: 'warning',
     accepted: 'success',
@@ -66,24 +88,48 @@ export function OrderCard({ order, onAccept, onReject, onProceedToBilling }: Ord
         </p>
         <p className="text-sm text-gray-600">{order.customerPhone}</p>
         <p className="text-sm text-gray-600">{order.customerEmail}</p>
+        {order.specialRequests && (
+          <p className="text-sm text-amber-800 bg-amber-50 mt-2 px-2 py-1 rounded">Seating: {order.specialRequests}</p>
+        )}
       </div>
 
       <div className="flex-1 mb-6">
         <ul className="space-y-2">
           {order.items.map((item, idx) => (
-            <li key={idx} className="flex justify-between text-sm">
-              <span className="text-gray-700">
-                <span className="font-medium text-gray-900">
-                  {item.quantity}x
-                </span>{' '}
-                {item.name}
-              </span>
-              <span className="text-gray-500">
-                A${(item.price * item.quantity).toFixed(2)}
-              </span>
+            <li key={idx} className="text-sm">
+              <div className="flex justify-between">
+                <span className="text-gray-700">
+                  <span className="font-medium text-gray-900">
+                    {item.quantity}x
+                  </span>{' '}
+                  {item.name}
+                </span>
+                <span className="text-gray-500">
+                  A${priceInclGst(item.price * item.quantity).toFixed(2)}
+                </span>
+              </div>
+              <ItemCustomizations customizations={item.customizations} />
             </li>
           ))}
         </ul>
+        <div className="mt-3 pt-3 border-t border-gray-200 space-y-1 text-sm">
+          <div className="flex justify-between text-gray-600">
+            <span>Subtotal (incl. GST)</span>
+            <span>A${subtotalInclGst.toFixed(2)}</span>
+          </div>
+          <div className="flex justify-between text-gray-600">
+            <span>GST included (10%)</span>
+            <span>A${gstIncluded.toFixed(2)}</span>
+          </div>
+          <div className="flex justify-between text-gray-600">
+            <span>Service fee</span>
+            <span>A$1.00</span>
+          </div>
+          <div className="flex justify-between font-semibold text-gray-900 pt-1">
+            <span>TOTAL</span>
+            <span>A${order.total.toFixed(2)}</span>
+          </div>
+        </div>
       </div>
 
       {order.status === 'pending' && onAccept && onReject && (

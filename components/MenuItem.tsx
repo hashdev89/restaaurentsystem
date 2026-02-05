@@ -5,6 +5,7 @@ import { MenuItem as MenuItemType } from '@/types'
 import { Button } from './ui/Button'
 import { useCart } from './providers/CartProvider'
 import { useNotification } from './providers/NotificationProvider'
+import { priceInclGst } from '@/lib/gst'
 
 interface MenuItemProps {
   item: MenuItemType
@@ -29,7 +30,7 @@ export function MenuItem({ item }: MenuItemProps) {
           <div className="flex justify-between items-start">
             <h3 className="text-lg font-semibold text-gray-900">{item.name}</h3>
             <span className="font-medium text-gray-900">
-              ${item.price.toFixed(2)}
+              A${priceInclGst(item.price).toFixed(2)} <span className="text-xs font-normal text-gray-500">(incl GST)</span>
             </span>
           </div>
           <p className="mt-1 text-sm text-gray-500 line-clamp-2">

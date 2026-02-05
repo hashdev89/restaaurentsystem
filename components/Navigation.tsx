@@ -49,7 +49,10 @@ export function Navigation() {
           {/* Logo/Brand */}
           <Link href="/" className="flex items-center space-x-2">
             <ChefHat className="w-6 h-6 text-orange-600" />
-            <span className="text-xl font-bold text-gray-900">RestaurantHub</span>
+            <div className="flex flex-col">
+              <span className="text-xl font-bold text-gray-900">EasyMenu</span>
+              <span className="text-xs text-gray-500 -mt-0.5 hidden sm:block">Search Easy & Order Easy</span>
+            </div>
           </Link>
 
           {/* Desktop Navigation */}

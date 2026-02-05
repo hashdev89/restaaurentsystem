@@ -16,13 +16,31 @@ function getDefaultRestaurantId(): string {
   return process.env.NEXT_PUBLIC_DEFAULT_RESTAURANT_ID || ''
 }
 
-export function KitchenDisplaySystem() {
+export function KitchenDisplaySystem({ restaurantId: restaurantIdProp }: { restaurantId?: string }) {
   const { success, info } = useNotification()
-  const [defaultRestaurantId, setDefaultRestaurantId] = useState(getDefaultRestaurantId())
+  const [defaultRestaurantId, setDefaultRestaurantId] = useState(restaurantIdProp || getDefaultRestaurantId())
   const [orders, setOrders] = useState<Order[]>([])
   const [filter, setFilter] = useState<OrderStatus | 'all'>('all')
+  const [kdsAccess, setKdsAccess] = useState<{ kdsEnabled: boolean; kdsPinRequired: boolean } | null>(null)
+  const [kdsPinVerified, setKdsPinVerified] = useState(false)
+  const [kdsPinInput, setKdsPinInput] = useState('')
+  const [kdsPinError, setKdsPinError] = useState('')
 
   useEffect(() => {
+    if (restaurantIdProp) {
+      setDefaultRestaurantId(restaurantIdProp)
+      setKdsPinVerified(false)
+      setKdsAccess(null)
+      fetch(`/api/restaurants/${restaurantIdProp}`)
+        .then((res) => res.ok ? res.json() : null)
+        .then((data) => {
+          if (data?.restaurant) setKdsAccess({ kdsEnabled: data.restaurant.kdsEnabled !== false, kdsPinRequired: data.restaurant.kdsPinRequired === true })
+        })
+        .catch(() => setKdsAccess({ kdsEnabled: true, kdsPinRequired: false }))
+      return
+    }
+    setKdsAccess(null)
+    setKdsPinVerified(false)
     if (getDefaultRestaurantId()) return
     let cancelled = false
     fetch('/api/restaurants')
@@ -33,7 +51,7 @@ export function KitchenDisplaySystem() {
       })
       .catch(() => { /* ignore */ })
     return () => { cancelled = true }
-  }, [])
+  }, [restaurantIdProp])
 
   const fetchOrders = useCallback(async () => {
     if (!defaultRestaurantId) return
@@ -89,6 +107,54 @@ export function KitchenDisplaySystem() {
   const preparingCount = statusCounts.preparing
   const readyCount = statusCounts.ready
   const completedCount = statusCounts.completed
+
+  // Gate: when linked to restaurant, check enabled + 4-digit PIN
+  if (restaurantIdProp) {
+    if (kdsAccess === null) {
+      return (
+        <div className="fixed inset-0 flex items-center justify-center bg-gray-100 p-4">
+          <Card className="p-8 max-w-md text-center">
+            <p className="text-gray-600">Loading KDS…</p>
+          </Card>
+        </div>
+      )
+    }
+    if (!kdsAccess.kdsEnabled) {
+      return (
+        <div className="fixed inset-0 flex items-center justify-center bg-gray-100 p-4">
+          <Card className="p-8 max-w-md text-center">
+            <h2 className="text-xl font-semibold text-gray-900 mb-2">KDS disabled</h2>
+            <p className="text-gray-600">System Control has turned off Kitchen (KDS) for this restaurant.</p>
+          </Card>
+        </div>
+      )
+    }
+    if (!kdsPinVerified) {
+      const handleKdsPinSubmit = async (e: React.FormEvent) => {
+        e.preventDefault()
+        const pin = kdsPinInput.replace(/\D/g, '').slice(0, 4)
+        if (pin.length !== 4) { setKdsPinError('Enter 4 digits'); return }
+        setKdsPinError('')
+        const res = await fetch(`/api/restaurants/${restaurantIdProp}/verify-pin`, { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ pin, type: 'kds' }) })
+        const data = await res.json().catch(() => ({}))
+        if (data.valid) setKdsPinVerified(true)
+        else setKdsPinError('Wrong PIN')
+      }
+      return (
+        <div className="fixed inset-0 flex items-center justify-center bg-gray-100 p-4">
+          <Card className="p-8 max-w-md">
+            <h2 className="text-xl font-semibold text-gray-900 mb-2">KDS access</h2>
+            <p className="text-sm text-gray-500 mb-4">Enter 4-digit PIN</p>
+            <form onSubmit={handleKdsPinSubmit} className="space-y-3">
+              <input type="password" inputMode="numeric" maxLength={4} value={kdsPinInput} onChange={(e) => { setKdsPinInput(e.target.value.replace(/\D/g, '').slice(0, 4)); setKdsPinError('') }} placeholder="••••" className="w-full rounded-md border border-gray-300 px-4 py-3 text-center text-2xl tracking-widest" autoComplete="off" />
+              {kdsPinError && <p className="text-sm text-red-600">{kdsPinError}</p>}
+              <Button type="submit" className="w-full">Unlock KDS</Button>
+            </form>
+          </Card>
+        </div>
+      )
+    }
+  }
 
   const updateOrderStatus = async (orderId: string, newStatus: OrderStatus) => {
     const order = orders.find((o) => o.id === orderId)
@@ -218,13 +284,28 @@ export function KitchenDisplaySystem() {
                 {order.items.map((item, idx) => (
                   <div
                     key={idx}
-                    className="bg-gray-700 rounded-md p-3 flex justify-between items-center"
+                    className="bg-gray-700 rounded-md p-3"
                   >
-                    <div>
+                    <div className="flex justify-between items-start">
                       <p className="font-semibold text-white">
                         {item.quantity}x {item.name}
                       </p>
                     </div>
+                    {item.customizations && item.customizations.length > 0 && (
+                      <div className="mt-1.5 text-xs text-gray-300 space-y-0.5">
+                        {item.customizations.map((g) => {
+                          const opts = (g.options || []).map((o) => o.name).filter(Boolean).join(', ')
+                          if (!opts) return null
+                          if ((g.type || '').toLowerCase() === 'remove') {
+                            return <div key={g.id}>Remove: {opts}</div>
+                          }
+                          const pricePart = (g.options || []).some((o) => Number(o?.price) > 0)
+                            ? ` (+$${(g.options || []).reduce((s, o) => s + Number(o?.price || 0), 0).toFixed(2)})`
+                            : ''
+                          return <div key={g.id}>Extras: {opts}{pricePart}</div>
+                        })}
+                      </div>
+                    )}
                   </div>
                 ))}
               </div>

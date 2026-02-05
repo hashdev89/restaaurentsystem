@@ -1,8 +1,8 @@
 'use client'
 
-import { useState, useEffect, useCallback } from 'react'
+import { useState, useEffect, useCallback, useMemo } from 'react'
 import Link from 'next/link'
-import { LayoutDashboard, History, LogOut, Utensils, Plus, Edit, Trash2, Shield, Hash, Package, Printer } from 'lucide-react'
+import { LayoutDashboard, History, LogOut, Utensils, Plus, Edit, Trash2, Hash, Package, Printer, User, Clock, Lock, Percent } from 'lucide-react'
 import { Order, MenuItem } from '@/types'
 import { OrderCard } from '../OrderCard'
 import { Button } from '../ui/Button'
@@ -10,6 +10,7 @@ import { Card } from '../ui/Card'
 import { Modal } from '../ui/Modal'
 import { MenuItemForm } from '../MenuItemForm'
 import { normalizeOrders, type SupabaseOrderRow } from '@/lib/orders'
+import { priceInclGst } from '@/lib/gst'
 import { useNotification } from '../providers/NotificationProvider'
 
 const ORDERS_POLL_MS = 8000
@@ -47,7 +48,7 @@ export function RestaurantDashboard({ restaurantId: restaurantIdProp }: { restau
     return () => { cancelled = true }
   }, [envOrPropId])
   const [menuItems, setMenuItems] = useState<MenuItem[]>([])
-  const [activeTab, setActiveTab] = useState<'pending' | 'ready' | 'history' | 'menu' | 'tables' | 'stock'>('pending')
+  const [activeTab, setActiveTab] = useState<'pending' | 'ready' | 'history' | 'menu' | 'tables' | 'stock' | 'staff' | 'shift' | 'access' | 'surcharges'>('pending')
   const [isModalOpen, setIsModalOpen] = useState(false)
   const [editingItem, setEditingItem] = useState<Partial<MenuItem> | null>(null)
   const [ordersLoading, setOrdersLoading] = useState(true)
@@ -62,6 +63,18 @@ export function RestaurantDashboard({ restaurantId: restaurantIdProp }: { restau
   const [newStockName, setNewStockName] = useState('')
   const [newStockQty, setNewStockQty] = useState(0)
   const [newStockPrice, setNewStockPrice] = useState(0)
+  const [restaurantAccess, setRestaurantAccess] = useState<{ posPinRequired?: boolean; kdsPinRequired?: boolean }>({})
+  const [accessPosPin, setAccessPosPin] = useState('')
+  const [accessKdsPin, setAccessKdsPin] = useState('')
+  const [accessPinsSaving, setAccessPinsSaving] = useState(false)
+  const [surchargeSundayEnabled, setSurchargeSundayEnabled] = useState(false)
+  const [surchargeSundayPercent, setSurchargeSundayPercent] = useState(10)
+  const [surchargePublicHolidayEnabled, setSurchargePublicHolidayEnabled] = useState(false)
+  const [surchargePublicHolidayPercent, setSurchargePublicHolidayPercent] = useState(15)
+  const [surchargePublicHolidayDates, setSurchargePublicHolidayDates] = useState<string[]>([])
+  const [surchargeNewDate, setSurchargeNewDate] = useState('')
+  const [surchargeManualOverride, setSurchargeManualOverride] = useState<'auto' | 'sunday' | 'public_holiday' | 'none'>('auto')
+  const [surchargeSaving, setSurchargeSaving] = useState(false)
 
   const fetchOrders = useCallback(async () => {
     try {
@@ -158,7 +171,7 @@ export function RestaurantDashboard({ restaurantId: restaurantIdProp }: { restau
       const res = await fetch(`/api/menu-items?restaurantId=${encodeURIComponent(currentRestaurantId)}`)
       if (!res.ok) return
       const data = await res.json()
-      const list = (data.items ?? []).map((row: { id: string; restaurant_id: string; name: string; description: string | null; price: number; category: string | null; image: string | null; is_available: boolean }) => ({
+      const list = (data.items ?? []).map((row: { id: string; restaurant_id: string; name: string; description: string | null; price: number; category: string | null; image: string | null; is_available: boolean; customizations?: MenuItem['customizations'] }) => ({
         id: row.id,
         restaurantId: row.restaurant_id,
         name: row.name,
@@ -166,7 +179,8 @@ export function RestaurantDashboard({ restaurantId: restaurantIdProp }: { restau
         price: Number(row.price),
         category: row.category ?? '',
         image: row.image ?? '',
-        isAvailable: row.is_available ?? true
+        isAvailable: row.is_available ?? true,
+        ...(row.customizations && row.customizations.length > 0 ? { customizations: row.customizations } : {})
       }))
       setMenuItems(list)
     } catch (e) {
@@ -187,6 +201,74 @@ export function RestaurantDashboard({ restaurantId: restaurantIdProp }: { restau
   useEffect(() => {
     if (activeTab === 'menu') fetchMenuItems()
   }, [activeTab, fetchMenuItems])
+
+  useEffect(() => {
+    if (activeTab === 'access' && currentRestaurantId) {
+      fetch(`/api/restaurants/${currentRestaurantId}`)
+        .then((res) => res.ok ? res.json() : null)
+        .then((data) => {
+          if (data?.restaurant) setRestaurantAccess({ posPinRequired: data.restaurant.posPinRequired, kdsPinRequired: data.restaurant.kdsPinRequired })
+        })
+        .catch(() => { /* ignore */ })
+    }
+  }, [activeTab, currentRestaurantId])
+
+  useEffect(() => {
+    if (activeTab === 'surcharges' && currentRestaurantId) {
+      fetch(`/api/restaurants/${currentRestaurantId}`)
+        .then((res) => res.ok ? res.json() : null)
+        .then((data) => {
+          const r = data?.restaurant
+          if (r) {
+            setSurchargeSundayEnabled(r.sundaySurchargeEnabled === true)
+            setSurchargeSundayPercent(Number(r.sundaySurchargePercent) || 0)
+            setSurchargePublicHolidayEnabled(r.publicHolidaySurchargeEnabled === true)
+            setSurchargePublicHolidayPercent(Number(r.publicHolidaySurchargePercent) || 0)
+            setSurchargePublicHolidayDates(Array.isArray(r.publicHolidayDates) ? [...r.publicHolidayDates] : [])
+            setSurchargeManualOverride(r.surchargeManualOverride === 'sunday' || r.surchargeManualOverride === 'public_holiday' || r.surchargeManualOverride === 'none' ? r.surchargeManualOverride : 'auto')
+          }
+        })
+        .catch(() => { /* ignore */ })
+    }
+  }, [activeTab, currentRestaurantId])
+
+  const handleSaveAccessPins = async (e: React.FormEvent) => {
+    e.preventDefault()
+    if (!currentRestaurantId) return
+    const posPin = accessPosPin.replace(/\D/g, '').slice(0, 4)
+    const kdsPin = accessKdsPin.replace(/\D/g, '').slice(0, 4)
+    if (!posPin && !kdsPin) {
+      error('No PINs', 'Enter at least one 4-digit PIN.')
+      return
+    }
+    if (posPin && posPin.length !== 4) {
+      error('Invalid PIN', 'POS PIN must be exactly 4 digits.')
+      return
+    }
+    if (kdsPin && kdsPin.length !== 4) {
+      error('Invalid PIN', 'KDS PIN must be exactly 4 digits.')
+      return
+    }
+    setAccessPinsSaving(true)
+    try {
+      const res = await fetch(`/api/restaurants/${currentRestaurantId}/access-pins`, {
+        method: 'PATCH',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ posPin: posPin || undefined, kdsPin: kdsPin || undefined })
+      })
+      if (!res.ok) {
+        const data = await res.json().catch(() => ({}))
+        throw new Error(data.error || 'Failed to save')
+      }
+      success('PINs saved', 'POS and KDS access PINs updated.')
+      setAccessPosPin('')
+      setAccessKdsPin('')
+    } catch (e) {
+      error('Could not save', e instanceof Error ? e.message : 'Failed to save PINs')
+    } finally {
+      setAccessPinsSaving(false)
+    }
+  }
 
   const handleAddTable = async (e: React.FormEvent) => {
     e.preventDefault()
@@ -285,7 +367,7 @@ export function RestaurantDashboard({ restaurantId: restaurantIdProp }: { restau
         <body>
           <div class="label">
             <h3>${item.name}</h3>
-            <div class="price">A$${Number(item.price).toFixed(2)}</div>
+            <div class="price">A$${priceInclGst(Number(item.price)).toFixed(2)} (incl. GST)</div>
             <img src="${barcodeImg}" alt="Barcode" />
             <div class="code">${item.barcode}</div>
           </div>
@@ -296,6 +378,12 @@ export function RestaurantDashboard({ restaurantId: restaurantIdProp }: { restau
     printWin.focus()
     setTimeout(() => { printWin.print(); printWin.close() }, 300)
   }
+
+  const menuCategoryOptions = useMemo(() => {
+    const defaults = ['Starters', 'Mains', 'Desserts', 'Drinks', 'Sides']
+    const fromItems = menuItems.map((m) => m.category).filter(Boolean) as string[]
+    return [...new Set([...defaults, ...fromItems])]
+  }, [menuItems])
 
   const handleAddMenuItem = () => {
     setEditingItem(null)
@@ -334,7 +422,8 @@ export function RestaurantDashboard({ restaurantId: restaurantIdProp }: { restau
             price: data.price,
             category: data.category,
             image: data.image,
-            isAvailable: data.isAvailable
+            isAvailable: data.isAvailable,
+            customizations: data.customizations
           })
         })
         if (!res.ok) {
@@ -353,7 +442,8 @@ export function RestaurantDashboard({ restaurantId: restaurantIdProp }: { restau
             price: data.price,
             category: data.category ?? 'Other',
             image: data.image ?? '',
-            isAvailable: data.isAvailable !== false
+            isAvailable: data.isAvailable !== false,
+            customizations: data.customizations
           })
         })
         if (!res.ok) {
@@ -411,17 +501,20 @@ export function RestaurantDashboard({ restaurantId: restaurantIdProp }: { restau
               <h1 className="text-xl font-bold text-gray-900">Restaurant Dashboard</h1>
             </div>
             <div className="flex items-center gap-4">
-              <Link href="/system/dashboard">
-                <Button variant="ghost" size="sm">
-                  <Shield className="w-4 h-4 mr-2" />
-                  System control
-                </Button>
-              </Link>
-              <Link href="/kitchen">
-                <Button variant="secondary" size="sm">
-                  Kitchen View
-                </Button>
-              </Link>
+              {currentRestaurantId && (
+                <>
+                  <Link href={`/restaurant/${currentRestaurantId}/pos`}>
+                    <Button variant="secondary" size="sm">
+                      POS
+                    </Button>
+                  </Link>
+                  <Link href={`/restaurant/${currentRestaurantId}/kitchen`}>
+                    <Button variant="secondary" size="sm">
+                      Kitchen (KDS)
+                    </Button>
+                  </Link>
+                </>
+              )}
               <Button
                 variant="ghost"
                 size="sm"
@@ -514,10 +607,259 @@ export function RestaurantDashboard({ restaurantId: restaurantIdProp }: { restau
             <Package className="w-4 h-4 mr-2" />
             Stock
           </button>
+          <button
+            onClick={() => setActiveTab('staff')}
+            className={`flex items-center px-4 py-2 rounded-md font-medium transition-colors whitespace-nowrap ${
+              activeTab === 'staff'
+                ? 'bg-orange-600 text-white'
+                : 'bg-white text-gray-600 hover:bg-gray-50'
+            }`}
+          >
+            <User className="w-4 h-4 mr-2" />
+            Staff Management
+          </button>
+          <button
+            onClick={() => setActiveTab('shift')}
+            className={`flex items-center px-4 py-2 rounded-md font-medium transition-colors whitespace-nowrap ${
+              activeTab === 'shift'
+                ? 'bg-orange-600 text-white'
+                : 'bg-white text-gray-600 hover:bg-gray-50'
+            }`}
+          >
+            <Clock className="w-4 h-4 mr-2" />
+            Shift Management
+          </button>
+          <button
+            onClick={() => setActiveTab('access')}
+            className={`flex items-center px-4 py-2 rounded-md font-medium transition-colors whitespace-nowrap ${
+              activeTab === 'access'
+                ? 'bg-orange-600 text-white'
+                : 'bg-white text-gray-600 hover:bg-gray-50'
+            }`}
+          >
+            <Lock className="w-4 h-4 mr-2" />
+            Access (PINs)
+          </button>
+          <button
+            onClick={() => setActiveTab('surcharges')}
+            className={`flex items-center px-4 py-2 rounded-md font-medium transition-colors whitespace-nowrap ${
+              activeTab === 'surcharges'
+                ? 'bg-orange-600 text-white'
+                : 'bg-white text-gray-600 hover:bg-gray-50'
+            }`}
+          >
+            <Percent className="w-4 h-4 mr-2" />
+            Surcharges
+          </button>
         </div>
 
         {/* Tab Content */}
-        {activeTab === 'tables' ? (
+        {activeTab === 'surcharges' ? (
+          <div>
+            <h2 className="text-lg font-semibold text-gray-900 mb-2">Sunday &amp; public holiday surcharges</h2>
+            <p className="text-sm text-gray-600 mb-4">Enable surcharges and set percentages. POS will apply them automatically by date, or use the manual override below. These settings apply to this restaurant and sync to POS.</p>
+            <Card className="p-6 max-w-2xl">
+              <form
+                onSubmit={async (e) => {
+                  e.preventDefault()
+                  if (!currentRestaurantId) return
+                  setSurchargeSaving(true)
+                  try {
+                    const res = await fetch(`/api/restaurants/${currentRestaurantId}`, {
+                      method: 'PATCH',
+                      headers: { 'Content-Type': 'application/json' },
+                      body: JSON.stringify({
+                        sundaySurchargeEnabled: surchargeSundayEnabled,
+                        sundaySurchargePercent: surchargeSundayPercent,
+                        publicHolidaySurchargeEnabled: surchargePublicHolidayEnabled,
+                        publicHolidaySurchargePercent: surchargePublicHolidayPercent,
+                        publicHolidayDates: surchargePublicHolidayDates,
+                        surchargeManualOverride: surchargeManualOverride,
+                      }),
+                    })
+                    if (!res.ok) throw new Error('Failed to save')
+                    success('Surcharges saved', 'POS will use these settings.')
+                  } catch (e) {
+                    error('Could not save', e instanceof Error ? e.message : 'Failed to save surcharges')
+                  } finally {
+                    setSurchargeSaving(false)
+                  }
+                }}
+                className="space-y-6"
+              >
+                <div>
+                  <h3 className="font-medium text-gray-900 mb-3">Sunday surcharge</h3>
+                  <div className="flex items-center gap-4 flex-wrap">
+                    <label className="flex items-center gap-2 cursor-pointer">
+                      <input
+                        type="checkbox"
+                        checked={surchargeSundayEnabled}
+                        onChange={(e) => setSurchargeSundayEnabled(e.target.checked)}
+                        className="rounded border-gray-300 text-orange-600"
+                      />
+                      <span className="text-sm">Enable Sunday surcharge</span>
+                    </label>
+                    <div className="flex items-center gap-2">
+                      <input
+                        type="number"
+                        min={0}
+                        max={25}
+                        step={0.5}
+                        value={surchargeSundayPercent}
+                        onChange={(e) => setSurchargeSundayPercent(Number(e.target.value) || 0)}
+                        className="w-20 rounded-md border border-gray-300 px-2 py-1.5 text-sm"
+                      />
+                      <span className="text-sm text-gray-500">% (e.g. 5–10)</span>
+                    </div>
+                  </div>
+                </div>
+                <div>
+                  <h3 className="font-medium text-gray-900 mb-3">Public holiday surcharge</h3>
+                  <div className="flex items-center gap-4 flex-wrap">
+                    <label className="flex items-center gap-2 cursor-pointer">
+                      <input
+                        type="checkbox"
+                        checked={surchargePublicHolidayEnabled}
+                        onChange={(e) => setSurchargePublicHolidayEnabled(e.target.checked)}
+                        className="rounded border-gray-300 text-orange-600"
+                      />
+                      <span className="text-sm">Enable public holiday surcharge</span>
+                    </label>
+                    <div className="flex items-center gap-2">
+                      <input
+                        type="number"
+                        min={0}
+                        max={25}
+                        step={0.5}
+                        value={surchargePublicHolidayPercent}
+                        onChange={(e) => setSurchargePublicHolidayPercent(Number(e.target.value) || 0)}
+                        className="w-20 rounded-md border border-gray-300 px-2 py-1.5 text-sm"
+                      />
+                      <span className="text-sm text-gray-500">% (e.g. 10–15)</span>
+                    </div>
+                  </div>
+                  <div className="mt-3">
+                    <label className="block text-sm font-medium text-gray-700 mb-1">Public holiday dates (YYYY-MM-DD)</label>
+                    <p className="text-xs text-gray-500 mb-2">Add dates when the public holiday surcharge applies. POS checks today’s date against this list.</p>
+                    <div className="flex gap-2 flex-wrap items-center">
+                      <input
+                        type="date"
+                        value={surchargeNewDate}
+                        onChange={(e) => setSurchargeNewDate(e.target.value)}
+                        className="rounded-md border border-gray-300 px-2 py-1.5 text-sm"
+                      />
+                      <Button
+                        type="button"
+                        variant="secondary"
+                        size="sm"
+                        onClick={() => {
+                          if (surchargeNewDate) {
+                            setSurchargePublicHolidayDates((prev) => (prev.includes(surchargeNewDate) ? prev : [...prev, surchargeNewDate].sort()))
+                            setSurchargeNewDate('')
+                          }
+                        }}
+                      >
+                        Add date
+                      </Button>
+                    </div>
+                    {surchargePublicHolidayDates.length > 0 && (
+                      <ul className="mt-2 flex flex-wrap gap-2">
+                        {surchargePublicHolidayDates.map((d) => (
+                          <li key={d} className="inline-flex items-center gap-1 bg-gray-100 rounded px-2 py-1 text-sm">
+                            {d}
+                            <button
+                              type="button"
+                              onClick={() => setSurchargePublicHolidayDates((prev) => prev.filter((x) => x !== d))}
+                              className="text-red-600 hover:text-red-800"
+                              aria-label="Remove"
+                            >
+                              <Trash2 className="w-3 h-3" />
+                            </button>
+                          </li>
+                        ))}
+                      </ul>
+                    )}
+                  </div>
+                </div>
+                <div>
+                  <label className="block text-sm font-medium text-gray-700 mb-1">Manual override for today</label>
+                  <p className="text-xs text-gray-500 mb-2">Force which surcharge applies in POS today (or use Auto to use date).</p>
+                  <select
+                    value={surchargeManualOverride}
+                    onChange={(e) => setSurchargeManualOverride(e.target.value as 'auto' | 'sunday' | 'public_holiday' | 'none')}
+                    className="rounded-md border border-gray-300 px-3 py-2 text-sm"
+                  >
+                    <option value="auto">Auto (use date: Sunday or public holiday list)</option>
+                    <option value="sunday">Force Sunday surcharge today</option>
+                    <option value="public_holiday">Force public holiday surcharge today</option>
+                    <option value="none">No surcharge today</option>
+                  </select>
+                </div>
+                <Button type="submit" disabled={surchargeSaving}>{surchargeSaving ? 'Saving…' : 'Save surcharges'}</Button>
+              </form>
+            </Card>
+          </div>
+        ) : activeTab === 'access' ? (
+          <div>
+            <h2 className="text-lg font-semibold text-gray-900 mb-4">POS & KDS access PINs</h2>
+            <p className="text-sm text-gray-600 mb-4">Set 4-digit PINs for POS and Kitchen (KDS). When &quot;Require 4-digit PIN&quot; is enabled for each, staff enter this PIN to open POS or KDS.</p>
+            <form onSubmit={handleSaveAccessPins} className="max-w-md space-y-4">
+              <div>
+                <label className="block text-sm font-medium text-gray-700 mb-1">POS PIN (4 digits)</label>
+                <input
+                  type="password"
+                  inputMode="numeric"
+                  pattern="[0-9]*"
+                  maxLength={4}
+                  value={accessPosPin}
+                  onChange={(e) => setAccessPosPin(e.target.value.replace(/\D/g, '').slice(0, 4))}
+                  placeholder="••••"
+                  className="w-full rounded-md border border-gray-300 px-3 py-2 text-lg tracking-widest"
+                  autoComplete="off"
+                />
+                {restaurantAccess.posPinRequired && <p className="text-xs text-orange-600 mt-1">PIN required for POS (enabled in System Control)</p>}
+              </div>
+              <div>
+                <label className="block text-sm font-medium text-gray-700 mb-1">KDS (Kitchen) PIN (4 digits)</label>
+                <input
+                  type="password"
+                  inputMode="numeric"
+                  pattern="[0-9]*"
+                  maxLength={4}
+                  value={accessKdsPin}
+                  onChange={(e) => setAccessKdsPin(e.target.value.replace(/\D/g, '').slice(0, 4))}
+                  placeholder="••••"
+                  className="w-full rounded-md border border-gray-300 px-3 py-2 text-lg tracking-widest"
+                  autoComplete="off"
+                />
+                {restaurantAccess.kdsPinRequired && <p className="text-xs text-orange-600 mt-1">PIN required for KDS (when enabled)</p>}
+              </div>
+              <Button type="submit" disabled={accessPinsSaving}>{(accessPosPin || accessKdsPin) ? (accessPinsSaving ? 'Saving…' : 'Save PINs') : 'Save PINs'}</Button>
+            </form>
+          </div>
+        ) : activeTab === 'staff' ? (
+          <div>
+            <h2 className="text-lg font-semibold text-gray-900 mb-4">Staff Management</h2>
+            <p className="text-sm text-gray-600 mb-4">Manage staff and permissions for this restaurant.</p>
+            <Card className="p-6">
+              <p className="text-gray-500 text-sm">Staff list and roles can be configured here. Add staff members, assign roles (e.g. waiter, kitchen, manager), and manage access.</p>
+              <div className="mt-4 pt-4 border-t border-gray-200">
+                <p className="text-xs text-gray-400">This section is available from Restaurant Dashboard. Connect to your user/role API to load and edit staff.</p>
+              </div>
+            </Card>
+          </div>
+        ) : activeTab === 'shift' ? (
+          <div>
+            <h2 className="text-lg font-semibold text-gray-900 mb-4">Shift Management</h2>
+            <p className="text-sm text-gray-600 mb-4">Start/end shifts and view shift reports.</p>
+            <Card className="p-6">
+              <p className="text-gray-500 text-sm">Track shifts, clock in/out, and view shift summaries. Start shift, end shift, and view today&apos;s shift report.</p>
+              <div className="mt-4 pt-4 border-t border-gray-200">
+                <p className="text-xs text-gray-400">Shift data can be integrated with your time-tracking or payroll system.</p>
+              </div>
+            </Card>
+          </div>
+        ) : activeTab === 'tables' ? (
           <div>
             <h2 className="text-lg font-semibold text-gray-900 mb-4">Tables & QR codes (dine-in)</h2>
             <p className="text-sm text-gray-600 mb-4">Add tables and print QR codes so customers can scan to view the menu and order (table is tracked).</p>
@@ -619,7 +961,7 @@ export function RestaurantDashboard({ restaurantId: restaurantIdProp }: { restau
                             className="w-20 rounded border border-gray-300 px-2 py-1 text-sm"
                           />
                         </td>
-                        <td className="px-4 py-3 text-sm">A${Number(i.price).toFixed(2)}</td>
+                        <td className="px-4 py-3 text-sm">A${priceInclGst(Number(i.price)).toFixed(2)}</td>
                         <td className="px-4 py-3 text-right">
                           <Button
                             type="button"
@@ -664,6 +1006,9 @@ export function RestaurantDashboard({ restaurantId: restaurantIdProp }: { restau
                         Price
                       </th>
                       <th className="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">
+                        Customizations
+                      </th>
+                      <th className="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">
                         Status
                       </th>
                       <th className="px-6 py-3 text-right text-xs font-medium text-gray-500 uppercase tracking-wider">
@@ -674,7 +1019,7 @@ export function RestaurantDashboard({ restaurantId: restaurantIdProp }: { restau
                   <tbody className="bg-white divide-y divide-gray-200">
                     {menuItemsLoading ? (
                       <tr>
-                        <td colSpan={5} className="px-6 py-8 text-center text-gray-500">
+                        <td colSpan={6} className="px-6 py-8 text-center text-gray-500">
                           Loading menu items…
                         </td>
                       </tr>
@@ -704,7 +1049,25 @@ export function RestaurantDashboard({ restaurantId: restaurantIdProp }: { restau
                             </span>
                           </td>
                           <td className="px-6 py-4 whitespace-nowrap text-sm text-gray-500">
-                            A${item.price.toFixed(2)}
+                            A${priceInclGst(item.price).toFixed(2)} (incl. GST)
+                          </td>
+                          <td className="px-6 py-4 text-sm text-gray-600 max-w-[200px]">
+                            {item.customizations && item.customizations.length > 0 ? (
+                              <div className="space-y-1 text-xs">
+                                {item.customizations.map((g) => {
+                                  const opts = (g.options || []).map((o) => o.name).filter(Boolean).join(', ')
+                                  if (!opts) return null
+                                  if ((g.type || '').toLowerCase() === 'remove') {
+                                    return <div key={g.id}><span className="text-gray-500">Remove:</span> {opts}</div>
+                                  }
+                                  const prices = (g.options || []).map((o) => Number(o?.price) > 0 ? `$${o.price}` : null).filter(Boolean)
+                                  const pricePart = prices.length > 0 ? ` (${prices.join(', ')})` : ''
+                                  return <div key={g.id}><span className="text-gray-500">Extras:</span> {opts}{pricePart}</div>
+                                })}
+                              </div>
+                            ) : (
+                              <span className="text-gray-400">—</span>
+                            )}
                           </td>
                           <td className="px-6 py-4 whitespace-nowrap">
                             <span
@@ -735,7 +1098,7 @@ export function RestaurantDashboard({ restaurantId: restaurantIdProp }: { restau
                       ))
                     ) : (
                       <tr>
-                        <td colSpan={5} className="px-6 py-12 text-center text-gray-500">
+                        <td colSpan={6} className="px-6 py-12 text-center text-gray-500">
                           No menu items yet. Add your first item!
                         </td>
                       </tr>
@@ -799,6 +1162,7 @@ export function RestaurantDashboard({ restaurantId: restaurantIdProp }: { restau
       >
         <MenuItemForm
           initialData={editingItem || undefined}
+          categoryOptions={menuCategoryOptions}
           onSubmit={handleMenuItemSubmit}
           onCancel={() => setIsModalOpen(false)}
         />

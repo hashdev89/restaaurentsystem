@@ -24,6 +24,24 @@ export interface Restaurant {
   };
   priceRange?: 'budget' | 'moderate' | 'expensive' | 'premium';
   cuisineTypes?: string[];
+  /** When false, POS for this restaurant is disabled (System Control). */
+  posEnabled?: boolean;
+  /** When false, KDS for this restaurant is disabled (System Control). */
+  kdsEnabled?: boolean;
+  /** When true, POS requires 4-digit PIN (set in Restaurant Dashboard). */
+  posPinRequired?: boolean;
+  /** When true, KDS requires 4-digit PIN (set in Restaurant Dashboard). */
+  kdsPinRequired?: boolean;
+  /** Sunday surcharge (e.g. 5–10%). */
+  sundaySurchargeEnabled?: boolean;
+  sundaySurchargePercent?: number;
+  /** Public holiday surcharge (e.g. 10–15%). */
+  publicHolidaySurchargeEnabled?: boolean;
+  publicHolidaySurchargePercent?: number;
+  /** Public holiday dates (YYYY-MM-DD) for automatic detection. */
+  publicHolidayDates?: string[];
+  /** Override for today: 'auto' | 'sunday' | 'public_holiday' | 'none'. */
+  surchargeManualOverride?: 'auto' | 'sunday' | 'public_holiday' | 'none';
 }
 
 export type SeatStatus = 'available' | 'reserved' | 'occupied' | 'maintenance';
@@ -54,6 +72,21 @@ export interface SeatBooking {
   updatedAt?: string;
 }
 
+/** Single option within a customization group (e.g. "No onion" or "Extra cheese" with price). */
+export interface MenuItemCustomizationOption {
+  id: string;
+  name: string;
+  price: number;
+}
+
+/** Group of options for an item: Remove options (no charge) or Extras (optional price). */
+export interface MenuItemCustomizationGroup {
+  id: string;
+  name: string;
+  type: 'remove' | 'extra';
+  options: MenuItemCustomizationOption[];
+}
+
 export interface MenuItem {
   id: string;
   restaurantId: string;
@@ -63,6 +96,8 @@ export interface MenuItem {
   category: string;
   image: string;
   isAvailable: boolean;
+  /** Remove options and Extras defined in Restaurant Dashboard; POS uses these when adding item to order. */
+  customizations?: MenuItemCustomizationGroup[];
 }
 
 export interface CartItem extends MenuItem {
@@ -74,6 +109,8 @@ export interface OrderItem {
   name: string;
   quantity: number;
   price: number;
+  /** Available customize options for this item (from menu_items); shown on order views. */
+  customizations?: MenuItemCustomizationGroup[];
 }
 
 export type OrderStatus = 'pending' | 'accepted' | 'preparing' | 'ready' | 'completed' | 'rejected';
@@ -92,6 +129,7 @@ export interface Order {
   status: OrderStatus;
   orderType: OrderType;
   tableNumber?: TableNumber;
+  specialRequests?: string;
   createdAt: string;
   updatedAt?: string;
   paymentStatus: PaymentStatus;

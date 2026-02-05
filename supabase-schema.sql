@@ -1,9 +1,15 @@
--- Supabase Database Schema for Restaurant Ordering System
--- Tables: restaurants, menu_items, orders, order_items, users, tables, seat_bookings
--- Then run supabase-migrations.sql for: menu_items (barcode, stock_quantity), inventory, and app policies
+-- ============================================================
+-- EasyMenu / Restaurant – Supabase schema for orders & checkout
+-- Run this in Supabase Dashboard → SQL Editor
+-- ============================================================
 
--- Restaurants Table
-CREATE TABLE restaurants (
+-- Enable UUID extension (usually already on)
+CREATE EXTENSION IF NOT EXISTS "uuid-ossp";
+
+-- --------------------------------------------------------------
+-- 1. RESTAURANTS (must exist before orders / menu_items)
+-- --------------------------------------------------------------
+CREATE TABLE IF NOT EXISTS restaurants (
   id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
   name TEXT NOT NULL,
   description TEXT,
@@ -11,162 +17,121 @@ CREATE TABLE restaurants (
   phone TEXT NOT NULL,
   image TEXT,
   location TEXT,
-  is_active BOOLEAN DEFAULT true,
-  rating DECIMAL(3,2) DEFAULT 0,
-  review_count INTEGER DEFAULT 0,
-  created_at TIMESTAMP WITH TIME ZONE DEFAULT NOW(),
-  updated_at TIMESTAMP WITH TIME ZONE DEFAULT NOW()
+  is_active BOOLEAN NOT NULL DEFAULT true,
+  rating NUMERIC(3,2) NOT NULL DEFAULT 0,
+  review_count INTEGER NOT NULL DEFAULT 0,
+  latitude NUMERIC(10, 7),
+  longitude NUMERIC(10, 7),
+  pos_enabled BOOLEAN NOT NULL DEFAULT true,
+  kds_enabled BOOLEAN NOT NULL DEFAULT true,
+  pos_pin_required BOOLEAN NOT NULL DEFAULT false,
+  kds_pin_required BOOLEAN NOT NULL DEFAULT false,
+  access_pos_pin TEXT,
+  access_kds_pin TEXT,
+  sunday_surcharge_enabled BOOLEAN NOT NULL DEFAULT false,
+  sunday_surcharge_percent NUMERIC(5,2) NOT NULL DEFAULT 0,
+  public_holiday_surcharge_enabled BOOLEAN NOT NULL DEFAULT false,
+  public_holiday_surcharge_percent NUMERIC(5,2) NOT NULL DEFAULT 0,
+  public_holiday_dates JSONB DEFAULT '[]'::jsonb,
+  surcharge_manual_override TEXT DEFAULT 'auto',
+  created_at TIMESTAMPTZ NOT NULL DEFAULT now(),
+  updated_at TIMESTAMPTZ NOT NULL DEFAULT now()
 );
 
--- Menu Items Table
-CREATE TABLE menu_items (
+-- --------------------------------------------------------------
+-- 2. MENU_ITEMS (referenced by order_items.menu_item_id)
+-- --------------------------------------------------------------
+CREATE TABLE IF NOT EXISTS menu_items (
   id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
-  restaurant_id UUID REFERENCES restaurants(id) ON DELETE CASCADE,
+  restaurant_id UUID NOT NULL REFERENCES restaurants(id) ON DELETE CASCADE,
   name TEXT NOT NULL,
   description TEXT,
-  price DECIMAL(10,2) NOT NULL,
-  category TEXT NOT NULL,
+  price NUMERIC(10, 2) NOT NULL,
+  category TEXT NOT NULL DEFAULT 'Other',
   image TEXT,
-  is_available BOOLEAN DEFAULT true,
-  created_at TIMESTAMP WITH TIME ZONE DEFAULT NOW(),
-  updated_at TIMESTAMP WITH TIME ZONE DEFAULT NOW()
+  is_available BOOLEAN NOT NULL DEFAULT true,
+  customizations JSONB,
+  created_at TIMESTAMPTZ NOT NULL DEFAULT now(),
+  updated_at TIMESTAMPTZ NOT NULL DEFAULT now()
 );
 
--- Orders Table
-CREATE TABLE orders (
+CREATE INDEX IF NOT EXISTS idx_menu_items_restaurant_id ON menu_items(restaurant_id);
+
+-- --------------------------------------------------------------
+-- 3. ORDERS
+-- --------------------------------------------------------------
+CREATE TABLE IF NOT EXISTS orders (
   id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
-  restaurant_id UUID REFERENCES restaurants(id) ON DELETE CASCADE,
+  restaurant_id UUID NOT NULL REFERENCES restaurants(id) ON DELETE CASCADE,
   customer_name TEXT NOT NULL,
   customer_email TEXT NOT NULL,
   customer_phone TEXT NOT NULL,
-  total DECIMAL(10,2) NOT NULL,
+  total NUMERIC(10, 2) NOT NULL,
   status TEXT NOT NULL DEFAULT 'pending',
-  order_type TEXT NOT NULL DEFAULT 'dine-in',
+  order_type TEXT NOT NULL DEFAULT 'pickup',
   table_number TEXT,
+  special_requests TEXT,
   payment_status TEXT NOT NULL DEFAULT 'pending',
   square_payment_id TEXT,
-  estimated_ready_time TIMESTAMP WITH TIME ZONE,
-  created_at TIMESTAMP WITH TIME ZONE DEFAULT NOW(),
-  updated_at TIMESTAMP WITH TIME ZONE DEFAULT NOW()
+  estimated_ready_time TEXT,
+  created_at TIMESTAMPTZ NOT NULL DEFAULT now(),
+  updated_at TIMESTAMPTZ NOT NULL DEFAULT now()
 );
 
--- Order Items Table
-CREATE TABLE order_items (
+CREATE INDEX IF NOT EXISTS idx_orders_restaurant_id ON orders(restaurant_id);
+CREATE INDEX IF NOT EXISTS idx_orders_status ON orders(status);
+CREATE INDEX IF NOT EXISTS idx_orders_created_at ON orders(created_at DESC);
+
+-- --------------------------------------------------------------
+-- 4. ORDER_ITEMS (line items for each order)
+-- --------------------------------------------------------------
+CREATE TABLE IF NOT EXISTS order_items (
   id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
-  order_id UUID REFERENCES orders(id) ON DELETE CASCADE,
-  menu_item_id UUID REFERENCES menu_items(id),
+  order_id UUID NOT NULL REFERENCES orders(id) ON DELETE CASCADE,
+  menu_item_id UUID REFERENCES menu_items(id) ON DELETE SET NULL,
   name TEXT NOT NULL,
-  quantity INTEGER NOT NULL,
-  price DECIMAL(10,2) NOT NULL,
-  created_at TIMESTAMP WITH TIME ZONE DEFAULT NOW()
+  quantity INTEGER NOT NULL DEFAULT 1 CHECK (quantity >= 1),
+  price NUMERIC(10, 2) NOT NULL DEFAULT 0,
+  created_at TIMESTAMPTZ NOT NULL DEFAULT now()
 );
 
--- Users Table (for authentication)
-CREATE TABLE users (
-  id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
-  email TEXT UNIQUE NOT NULL,
-  name TEXT,
-  role TEXT NOT NULL DEFAULT 'customer',
-  restaurant_id UUID REFERENCES restaurants(id),
-  created_at TIMESTAMP WITH TIME ZONE DEFAULT NOW()
-);
+CREATE INDEX IF NOT EXISTS idx_order_items_order_id ON order_items(order_id);
+CREATE INDEX IF NOT EXISTS idx_order_items_menu_item_id ON order_items(menu_item_id);
 
--- Tables/Seats Table
-CREATE TABLE tables (
-  id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
-  restaurant_id UUID REFERENCES restaurants(id) ON DELETE CASCADE,
-  table_number TEXT NOT NULL,
-  capacity INTEGER NOT NULL,
-  status TEXT NOT NULL DEFAULT 'available',
-  location TEXT,
-  created_at TIMESTAMP WITH TIME ZONE DEFAULT NOW(),
-  updated_at TIMESTAMP WITH TIME ZONE DEFAULT NOW(),
-  UNIQUE(restaurant_id, table_number)
-);
-
--- Seat Bookings Table
-CREATE TABLE seat_bookings (
-  id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
-  restaurant_id UUID REFERENCES restaurants(id) ON DELETE CASCADE,
-  table_id UUID REFERENCES tables(id) ON DELETE SET NULL,
-  table_number TEXT NOT NULL,
-  customer_name TEXT NOT NULL,
-  customer_email TEXT NOT NULL,
-  customer_phone TEXT NOT NULL,
-  booking_date DATE NOT NULL,
-  booking_time TIME NOT NULL,
-  number_of_guests INTEGER NOT NULL,
-  status TEXT NOT NULL DEFAULT 'pending',
-  special_requests TEXT,
-  created_at TIMESTAMP WITH TIME ZONE DEFAULT NOW(),
-  updated_at TIMESTAMP WITH TIME ZONE DEFAULT NOW()
-);
-
--- Indexes for better query performance
-CREATE INDEX idx_menu_items_restaurant ON menu_items(restaurant_id);
-CREATE INDEX idx_orders_restaurant ON orders(restaurant_id);
-CREATE INDEX idx_orders_status ON orders(status);
-CREATE INDEX idx_orders_created ON orders(created_at);
-CREATE INDEX idx_order_items_order ON order_items(order_id);
-CREATE INDEX idx_tables_restaurant ON tables(restaurant_id);
-CREATE INDEX idx_tables_status ON tables(status);
-CREATE INDEX idx_seat_bookings_restaurant ON seat_bookings(restaurant_id);
-CREATE INDEX idx_seat_bookings_date ON seat_bookings(booking_date);
-CREATE INDEX idx_seat_bookings_table ON seat_bookings(table_id);
-CREATE INDEX idx_seat_bookings_status ON seat_bookings(status);
-
--- Enable Row Level Security
+-- --------------------------------------------------------------
+-- 5. RLS (Row Level Security) – allow app to create/read orders
+-- If your app uses the anon key, enable these so checkout works.
+-- --------------------------------------------------------------
 ALTER TABLE restaurants ENABLE ROW LEVEL SECURITY;
 ALTER TABLE menu_items ENABLE ROW LEVEL SECURITY;
 ALTER TABLE orders ENABLE ROW LEVEL SECURITY;
 ALTER TABLE order_items ENABLE ROW LEVEL SECURITY;
-ALTER TABLE users ENABLE ROW LEVEL SECURITY;
-ALTER TABLE tables ENABLE ROW LEVEL SECURITY;
-ALTER TABLE seat_bookings ENABLE ROW LEVEL SECURITY;
 
--- Policies (adjust based on your security requirements)
--- Allow public read access to restaurants and menu items
-CREATE POLICY "Public restaurants are viewable by everyone" ON restaurants
-  FOR SELECT USING (is_active = true);
+-- Policies: allow all operations for anon and authenticated (app backend)
+-- Adjust or remove if you use service_role key only.
 
-CREATE POLICY "Public menu items are viewable by everyone" ON menu_items
-  FOR SELECT USING (true);
+DROP POLICY IF EXISTS "Allow read restaurants" ON restaurants;
+CREATE POLICY "Allow read restaurants" ON restaurants FOR SELECT USING (true);
 
--- Allow authenticated users to create orders
-CREATE POLICY "Users can create orders" ON orders
-  FOR INSERT WITH CHECK (true);
+DROP POLICY IF EXISTS "Allow read menu_items" ON menu_items;
+CREATE POLICY "Allow read menu_items" ON menu_items FOR SELECT USING (true);
 
--- Allow restaurant owners to view their orders
-CREATE POLICY "Restaurant owners can view their orders" ON orders
-  FOR SELECT USING (
-    EXISTS (
-      SELECT 1 FROM users
-      WHERE users.id = auth.uid()
-      AND users.restaurant_id = orders.restaurant_id
-    )
-  );
+DROP POLICY IF EXISTS "Allow all orders" ON orders;
+CREATE POLICY "Allow all orders" ON orders FOR ALL USING (true) WITH CHECK (true);
 
--- Allow restaurant owners to update their orders
-CREATE POLICY "Restaurant owners can update their orders" ON orders
-  FOR UPDATE USING (
-    EXISTS (
-      SELECT 1 FROM users
-      WHERE users.id = auth.uid()
-      AND users.restaurant_id = orders.restaurant_id
-    )
-  );
+DROP POLICY IF EXISTS "Allow all order_items" ON order_items;
+CREATE POLICY "Allow all order_items" ON order_items FOR ALL USING (true) WITH CHECK (true);
 
--- Tables policies
-CREATE POLICY "Public tables are viewable by everyone" ON tables
-  FOR SELECT USING (true);
-
--- Seat bookings policies
-CREATE POLICY "Public can view bookings" ON seat_bookings
-  FOR SELECT USING (true);
-
-CREATE POLICY "Users can create bookings" ON seat_bookings
-  FOR INSERT WITH CHECK (true);
-
-CREATE POLICY "Users can update their own bookings" ON seat_bookings
-  FOR UPDATE USING (true);
-
+-- --------------------------------------------------------------
+-- 6. Optional: seed one restaurant (copy the returned id to .env)
+-- --------------------------------------------------------------
+-- INSERT INTO restaurants (name, description, address, phone, location)
+-- VALUES (
+--   'The Rocks Cafe',
+--   'Authentic Australian cuisine.',
+--   '123 George Street, The Rocks, Sydney NSW 2000',
+--   '(02) 9251 2345',
+--   'The Rocks, Sydney'
+-- )
+-- ON CONFLICT DO NOTHING
+-- RETURNING id, name;

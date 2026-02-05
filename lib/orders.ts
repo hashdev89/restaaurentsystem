@@ -1,4 +1,4 @@
-import { Order, OrderItem } from '@/types'
+import { Order, OrderItem, MenuItemCustomizationGroup } from '@/types'
 
 /** Supabase returns snake_case; normalize to Order (camelCase, items from order_items) */
 export interface SupabaseOrderRow {
@@ -11,6 +11,7 @@ export interface SupabaseOrderRow {
   status: string
   order_type: string
   table_number: string | null
+  special_requests: string | null
   payment_status: string
   square_payment_id: string | null
   estimated_ready_time: string | null
@@ -26,6 +27,7 @@ export interface SupabaseOrderItemRow {
   name: string
   quantity: number
   price: number
+  customizations?: MenuItemCustomizationGroup[]
 }
 
 export function normalizeOrder(row: SupabaseOrderRow): Order {
@@ -33,7 +35,8 @@ export function normalizeOrder(row: SupabaseOrderRow): Order {
     menuItemId: oi.menu_item_id || oi.id,
     name: oi.name,
     quantity: oi.quantity,
-    price: Number(oi.price)
+    price: Number(oi.price),
+    ...(oi.customizations && oi.customizations.length > 0 ? { customizations: oi.customizations } : {})
   }))
   return {
     id: row.id,
@@ -46,6 +49,7 @@ export function normalizeOrder(row: SupabaseOrderRow): Order {
     status: row.status as Order['status'],
     orderType: row.order_type as Order['orderType'],
     tableNumber: row.table_number ?? undefined,
+    specialRequests: row.special_requests ?? undefined,
     paymentStatus: row.payment_status as Order['paymentStatus'],
     squarePaymentId: row.square_payment_id ?? undefined,
     estimatedReadyTime: row.estimated_ready_time ?? undefined,

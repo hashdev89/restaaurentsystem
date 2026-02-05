@@ -25,11 +25,27 @@ function normalizePhone(phone: string): string {
 export async function POST(request: NextRequest) {
   try {
     const body = await request.json()
-    const { restaurantId, customerName, customerEmail, customerPhone, items, total, orderType, tableNumber, paymentStatus, squarePaymentId } = body
+    const { restaurantId, customerName, customerEmail, customerPhone, items, total, orderType, tableNumber, specialRequests, paymentStatus, squarePaymentId } = body
 
     if (!customerName?.trim() || !customerEmail?.trim() || !customerPhone?.trim()) {
       return NextResponse.json(
         { error: 'Name, email and phone are required to place an order.' },
+        { status: 400 }
+      )
+    }
+
+    const orderItems = Array.isArray(items) ? items : []
+    if (orderItems.length === 0) {
+      return NextResponse.json(
+        { error: 'Your cart is empty. Add items before checkout.' },
+        { status: 400 }
+      )
+    }
+
+    const totalNum = typeof total === 'number' && Number.isFinite(total) ? total : Number(total)
+    if (Number.isNaN(totalNum) || totalNum < 0) {
+      return NextResponse.json(
+        { error: 'Invalid order total. Please refresh and try again.' },
         { status: 400 }
       )
     }
@@ -63,10 +79,11 @@ export async function POST(request: NextRequest) {
         customer_name: customerName,
         customer_email: customerEmail,
         customer_phone: customerPhone,
-        total,
+        total: totalNum,
         status: 'pending',
-        order_type: orderType,
+        order_type: orderType || 'pickup',
         table_number: tableNumber || null,
+        special_requests: specialRequests || null,
         payment_status: paymentStatus || 'pending',
         square_payment_id: squarePaymentId || null
       })
@@ -74,28 +91,47 @@ export async function POST(request: NextRequest) {
       .single()
 
     if (orderError) {
+      const msg = String(orderError.message || '')
+      if (msg.includes('row-level security') || msg.includes('policy')) {
+        return NextResponse.json(
+          { error: 'Order could not be created. Please contact the restaurant or try again later.' },
+          { status: 403 }
+        )
+      }
       throw orderError
     }
 
-    // Insert order items
-    const orderItems = items.map((item: { menuItemId: string; name: string; quantity: number; price: number }) => ({
+    // Insert order items (validate shape and types)
+    const rows = orderItems.map((item: { menuItemId?: string; name?: string; quantity?: number; price?: number }) => ({
       order_id: order.id,
-      menu_item_id: item.menuItemId,
-      name: item.name,
-      quantity: item.quantity,
-      price: item.price
+      menu_item_id: item.menuItemId ?? '',
+      name: String(item.name ?? '').trim() || 'Item',
+      quantity: Math.max(1, Math.floor(Number(item.quantity) || 1)),
+      price: Number(item.price) || 0
     }))
 
-    const { error: itemsError } = await supabase.from('order_items').insert(orderItems)
+    const { error: itemsError } = await supabase.from('order_items').insert(rows)
 
     if (itemsError) {
+      const msg = String(itemsError.message || '')
+      if (msg.includes('foreign key') || msg.includes('violates foreign key')) {
+        return NextResponse.json(
+          { error: 'One or more items in your cart are no longer available. Please go back to the menu and update your cart.' },
+          { status: 400 }
+        )
+      }
       throw itemsError
     }
 
     return NextResponse.json({ orderId: order.id, order }, { status: 201 })
   } catch (error: unknown) {
     console.error('Order creation error:', error)
-    const message = error instanceof Error ? error.message : 'Failed to create order'
+    let message = 'Failed to create order'
+    if (error && typeof error === 'object' && 'message' in error && typeof (error as { message: unknown }).message === 'string') {
+      message = (error as { message: string }).message
+    } else if (error instanceof Error) {
+      message = error.message
+    }
     return NextResponse.json({ error: message }, { status: 500 })
   }
 }
@@ -151,6 +187,38 @@ export async function GET(request: NextRequest) {
       }
     }
     let orders = Array.from(byId.values())
+
+    // Enrich order_items with menu item customizations (Remove options + Extras) for display
+    const menuItemIds = [...new Set(
+      orders.flatMap((o) =>
+        (Array.isArray(o.order_items) ? o.order_items : []).map(
+          (oi: { menu_item_id?: string }) => oi?.menu_item_id
+        ).filter(Boolean) as string[]
+      )
+    )]
+    let menuCustomizationsMap: Record<string, unknown> = {}
+    if (menuItemIds.length > 0) {
+      const { data: menuRows } = await supabase
+        .from('menu_items')
+        .select('id, customizations')
+        .in('id', menuItemIds)
+      if (Array.isArray(menuRows)) {
+        menuCustomizationsMap = Object.fromEntries(
+          menuRows
+            .filter((r: { id?: string; customizations?: unknown }) => r?.id != null)
+            .map((r: { id: string; customizations?: unknown }) => [r.id, r.customizations ?? null])
+        )
+      }
+    }
+    for (const order of orders) {
+      const items = Array.isArray(order.order_items) ? order.order_items : []
+      for (const oi of items as { menu_item_id?: string; customizations?: unknown }[]) {
+        const mid = oi?.menu_item_id
+        if (mid && menuCustomizationsMap[mid] != null && Array.isArray(menuCustomizationsMap[mid])) {
+          oi.customizations = menuCustomizationsMap[mid] as unknown[]
+        }
+      }
+    }
 
     // Filter by customer (for "Track your order" – show only this customer's orders)
     if (customerPhoneParam?.trim()) {

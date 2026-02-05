@@ -8,6 +8,7 @@ import { MenuItem } from '@/components/MenuItem'
 import { Button } from '@/components/ui/Button'
 import { Input } from '@/components/ui/Input'
 import { useCart } from '@/components/providers/CartProvider'
+import { addGst } from '@/lib/gst'
 import { MenuItem as MenuItemType, Restaurant } from '@/types'
 
 function mapApiRestaurant(row: { id: string; name: string; description: string | null; address: string; phone: string; image: string | null; location: string | null; is_active: boolean; rating: number; review_count: number }): Restaurant {
@@ -130,6 +131,10 @@ export function CustomerMenu() {
     return matchesCategory && matchesSearch
   })
 
+  // Cart button: always show A$ and GST-inclusive subtotal (matches menu prices)
+  const cartSubtotalInclGst = addGst(total)
+  const cartAmountLabel = `A$${cartSubtotalInclGst.toFixed(2)}`
+
   return (
     <div className="min-h-screen bg-gray-50 pb-20 md:pb-0">
       {/* Header */}
@@ -165,7 +170,7 @@ export function CustomerMenu() {
               <Link href="/cart">
                 <Button variant="primary" className="relative">
                   <ShoppingBag className="w-5 h-5 mr-2" />
-                  Cart ({itemCount}) - ${total.toFixed(2)}
+                  Cart ({itemCount}) — A${addGst(total).toFixed(2)}
                 </Button>
               </Link>
             </div>
@@ -253,7 +258,7 @@ export function CustomerMenu() {
                 <ShoppingBag className="w-5 h-5 mr-2" />
                 {itemCount} items
               </span>
-              <span>${total.toFixed(2)}</span>
+              <span>{cartAmountLabel}</span>
             </Button>
           </Link>
         </div>

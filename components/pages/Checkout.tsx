@@ -11,6 +11,7 @@ import { Input } from '../ui/Input'
 import { Card } from '../ui/Card'
 import { Select } from '../ui/Select'
 import { OrderType } from '@/types'
+import { gstAmount, priceInclGst } from '@/lib/gst'
 
 const CUSTOMER_PROFILE_KEY = 'restaurant-customer-profile'
 
@@ -48,8 +49,14 @@ export function Checkout() {
   const { success, error } = useNotification()
   const router = useRouter()
   const [isProcessing, setIsProcessing] = useState(false)
-  const [orderType, setOrderType] = useState<OrderType>('dine-in')
+  const [orderType, setOrderType] = useState<OrderType>('pickup')
   const [tableNumber, setTableNumber] = useState(cartTable ?? '')
+
+  // Dine-in seating (only used when orderType === 'dine-in')
+  const [dineInGuests, setDineInGuests] = useState<'single' | 'group'>('single')
+  const [guestCount, setGuestCount] = useState(2)
+  const [childrenCount, setChildrenCount] = useState(0)
+  const [childrenAges, setChildrenAges] = useState('')
 
   useEffect(() => {
     if (cartTable) setTableNumber(cartTable)
@@ -85,13 +92,27 @@ export function Checkout() {
     }))
   }
 
-  const subtotal = total
-  const gstAmount = total * 0.1
-  const serviceFeeRate = 0.01
-  const serviceFeeAmount = total * serviceFeeRate
-  const finalTotal = total + gstAmount + serviceFeeAmount // Subtotal + GST (10%) + Service fee (1%)
+  const subtotalExGst = total
+  const gst = gstAmount(total)
+  const serviceFeeAmount = 1 // Flat A$1 per order
+  const finalTotal = total + gst + serviceFeeAmount // Subtotal (ex GST) + GST (10%) + Service fee (A$1)
+
+  const buildDineInSeatingNote = (): string | null => {
+    if (orderType !== 'dine-in') return null
+    const adults = dineInGuests === 'single' ? 1 : guestCount
+    const parts: string[] = [`Seating: ${adults} ${adults === 1 ? 'person' : 'people'}.`]
+    if (childrenCount > 0) {
+      const ageNote = childrenAges.trim() ? ` (ages: ${childrenAges.trim()})` : ''
+      parts.push(`Children: ${childrenCount}${ageNote}.`)
+    }
+    return parts.join(' ')
+  }
 
   const createOrderInSupabase = async (opts: { paymentStatus: string; squarePaymentId?: string }) => {
+    if (!items.length) {
+      throw new Error('Your cart is empty. Add items before checkout.')
+    }
+    const specialRequests = buildDineInSeatingNote()
     const orderResponse = await fetch('/api/orders', {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
@@ -110,6 +131,7 @@ export function Checkout() {
         status: 'pending',
         orderType,
         tableNumber: orderType === 'dine-in' ? tableNumber : null,
+        specialRequests: specialRequests || undefined,
         paymentStatus: opts.paymentStatus,
         squarePaymentId: opts.squarePaymentId || null
       })
@@ -184,7 +206,7 @@ export function Checkout() {
     } catch (err: unknown) {
       const msg = err instanceof Error ? err.message : 'Payment failed. Please try again.'
       console.error('Checkout error:', err)
-      error('Checkout failed', msg)
+      error('Checkout failed', msg, { duration: 6000 })
     } finally {
       setIsProcessing(false)
     }
@@ -212,21 +234,11 @@ export function Checkout() {
                   value={orderType}
                   onChange={(e) => setOrderType(e.target.value as OrderType)}
                   options={[
-                    { value: 'dine-in', label: 'Dine In' },
                     { value: 'pickup', label: 'Pickup' },
+                    { value: 'dine-in', label: 'Reserve a dine (Dine in)' },
                     { value: 'delivery', label: 'Delivery' }
                   ]}
                 />
-                {orderType === 'dine-in' && (
-                  <Input
-                    label="Table Number"
-                    name="tableNumber"
-                    value={tableNumber}
-                    onChange={(e) => setTableNumber(e.target.value)}
-                    placeholder="e.g., 12"
-                    required
-                  />
-                )}
               </div>
             </Card>
 
@@ -265,6 +277,82 @@ export function Checkout() {
                 </div>
               </div>
             </Card>
+
+            {/* Dine-in seating (only when Reserve a dine is selected) */}
+            {orderType === 'dine-in' && (
+              <Card
+                header={<h2 className="text-lg font-semibold">Dine-in seating</h2>}
+              >
+                <p className="text-sm text-gray-600 mb-4">This helps the restaurant prepare the right table for you.</p>
+                <div className="space-y-6">
+                  <div>
+                    <label className="block text-sm font-medium text-gray-700 mb-2">How many people are joining?</label>
+                    <div className="flex flex-wrap gap-4">
+                      <label className="flex items-center gap-2 cursor-pointer">
+                        <input
+                          type="radio"
+                          name="dineInGuests"
+                          checked={dineInGuests === 'single'}
+                          onChange={() => setDineInGuests('single')}
+                          className="rounded-full border-gray-300 text-orange-600 focus:ring-orange-500"
+                        />
+                        <span className="text-gray-700">Single person</span>
+                      </label>
+                      <label className="flex items-center gap-2 cursor-pointer">
+                        <input
+                          type="radio"
+                          name="dineInGuests"
+                          checked={dineInGuests === 'group'}
+                          onChange={() => setDineInGuests('group')}
+                          className="rounded-full border-gray-300 text-orange-600 focus:ring-orange-500"
+                        />
+                        <span className="text-gray-700">Group</span>
+                      </label>
+                    </div>
+                    {dineInGuests === 'group' && (
+                      <div className="mt-3">
+                        <label className="block text-xs font-medium text-gray-500 mb-1">Number of people</label>
+                        <input
+                          type="number"
+                          min={2}
+                          max={50}
+                          value={guestCount}
+                          onChange={(e) => setGuestCount(Math.max(2, Math.min(50, parseInt(e.target.value, 10) || 2)))}
+                          className="w-24 rounded-lg border border-gray-300 px-3 py-2 text-sm focus:ring-2 focus:ring-orange-500 focus:border-orange-500"
+                        />
+                      </div>
+                    )}
+                  </div>
+                  <div>
+                    <label className="block text-sm font-medium text-gray-700 mb-2">Children (if any)</label>
+                    <div className="flex flex-wrap gap-3 items-center">
+                      <span className="text-sm text-gray-600">Number of kids:</span>
+                      <select
+                        value={childrenCount}
+                        onChange={(e) => setChildrenCount(parseInt(e.target.value, 10))}
+                        className="rounded-lg border border-gray-300 px-3 py-2 text-sm focus:ring-2 focus:ring-orange-500 focus:border-orange-500"
+                      >
+                        {[0, 1, 2, 3, 4, 5, 6, 7, 8].map((n) => (
+                          <option key={n} value={n}>{n === 0 ? 'None' : n}</option>
+                        ))}
+                      </select>
+                    </div>
+                    {childrenCount > 0 && (
+                      <div className="mt-3">
+                        <Input
+                          label="Children ages (optional)"
+                          name="childrenAges"
+                          value={childrenAges}
+                          onChange={(e) => setChildrenAges(e.target.value)}
+                          placeholder="e.g. 5, 7 or under 5, 5–10"
+                        />
+                        <p className="text-xs text-gray-500 mt-1">Ages or age ranges help the restaurant with seating and high chairs.</p>
+                      </div>
+                    )}
+                  </div>
+                </div>
+              </Card>
+            )}
 
             {/* Payment Info */}
             <Card
@@ -320,51 +408,38 @@ export function Checkout() {
           <div className="w-full lg:w-[380px] lg:flex-shrink-0 mt-8 lg:mt-0">
             <Card className="lg:sticky lg:top-8">
               <h2 className="text-lg font-semibold text-gray-900 mb-4">Order Summary</h2>
+              <div className="mb-4 pb-4 border-b border-gray-200">
+                <h3 className="text-sm font-medium text-gray-700 mb-2">Items (incl. GST)</h3>
+                <ul className="space-y-1">
+                  {items.map((item) => (
+                    <li key={item.id} className="flex justify-between text-sm text-gray-600">
+                      <span>{item.quantity}x {item.name}</span>
+                      <span>A${(priceInclGst(item.price) * item.quantity).toFixed(2)}</span>
+                    </li>
+                  ))}
+                </ul>
+              </div>
               <div className="space-y-2 mb-4">
                 <div className="flex justify-between text-gray-600 text-sm">
-                  <span>Subtotal ({items.length} items)</span>
-                  <span>A${subtotal.toFixed(2)}</span>
+                  <span>Subtotal (incl. GST) — {items.length} items</span>
+                  <span>A${(subtotalExGst + gst).toFixed(2)}</span>
                 </div>
                 <div className="flex justify-between text-gray-600 text-sm">
-                  <span>GST (10%)</span>
-                  <span>A${gstAmount.toFixed(2)}</span>
+                  <span>GST included (10%)</span>
+                  <span>A${gst.toFixed(2)}</span>
                 </div>
                 <div className="flex justify-between text-gray-600 text-sm">
-                  <span>Service fee (1%)</span>
-                  <span>A${serviceFeeAmount.toFixed(2)}</span>
+                  <span>Service fee</span>
+                  <span>A$1.00</span>
                 </div>
               </div>
               <div className="border-t border-gray-200 pt-3 flex justify-between font-bold text-lg text-gray-900 mb-6">
-                <span>Total</span>
+                <span>TOTAL</span>
                 <span>A${finalTotal.toFixed(2)}</span>
               </div>
 
               {/* Buttons - responsive */}
               <div className="flex flex-col gap-3">
-                {orderType === 'dine-in' && (
-                  <Button
-                    type="button"
-                    variant="secondary"
-                    size="lg"
-                    className="w-full text-base sm:text-lg py-3 sm:py-4 min-h-[48px] sm:min-h-[56px]"
-                    disabled={isProcessing}
-                    onClick={(e) => handlePlaceOrderPayLater(e, 'You can pay at the table.')}
-                  >
-                    {isProcessing ? 'Placing order...' : 'Place order (pay at table)'}
-                  </Button>
-                )}
-                {orderType === 'pickup' && (
-                  <Button
-                    type="button"
-                    variant="secondary"
-                    size="lg"
-                    className="w-full text-base sm:text-lg py-3 sm:py-4 min-h-[48px] sm:min-h-[56px]"
-                    disabled={isProcessing}
-                    onClick={(e) => handlePlaceOrderPayLater(e, 'Pay at the restaurant when you pickup.')}
-                  >
-                    {isProcessing ? 'Placing order...' : 'Place order (pay at restaurant when pickup)'}
-                  </Button>
-                )}
                 <Button
                   type="submit"
                   size="lg"

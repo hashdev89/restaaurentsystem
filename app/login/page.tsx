@@ -90,7 +90,7 @@ export default function LoginPage() {
             </Button>
           </form>
           <p className="text-sm text-gray-500 mt-4 text-center">
-            Restaurant logins are created in <strong>System Dashboard</strong> (open as admin) → <strong>Restaurants</strong> → Add restaurant or Edit → set &quot;Login email&quot; and &quot;Login password&quot; (min 8 characters) → Save. Use that email and password here.
+            This login works for this restaurant’s <strong>Dashboard</strong>, <strong>POS</strong>, and <strong>Kitchen (KDS)</strong>. Credentials are set in <strong>System Control</strong> → Restaurants → Add or Edit → &quot;Login email&quot; and &quot;Login password&quot; (min 8 characters) → Save.
           </p>
         </Card>
       </div>

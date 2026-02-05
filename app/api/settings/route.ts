@@ -2,7 +2,7 @@ import { NextRequest, NextResponse } from 'next/server'
 import { supabase } from '@/lib/supabase'
 
 const DEFAULT_SETTINGS = {
-  businessName: 'RestaurantHub',
+  businessName: 'EasyMenu',
   taxRate: 10,
   currency: 'AUD',
   timezone: 'Australia/Sydney',
@@ -86,7 +86,7 @@ export async function PATCH(request: NextRequest) {
     const updates: Record<string, unknown> = {
       updated_at: new Date().toISOString(),
     }
-    if (typeof businessName === 'string') updates.business_name = businessName.trim() || 'RestaurantHub'
+    if (typeof businessName === 'string') updates.business_name = businessName.trim() || 'EasyMenu'
     if (typeof taxRate === 'number' || (typeof taxRate === 'string' && taxRate !== ''))
       updates.tax_rate = Number(taxRate) || 0
     if (typeof currency === 'string') updates.currency = currency.trim() || 'AUD'

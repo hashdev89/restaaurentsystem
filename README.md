@@ -1,4 +1,4 @@
-# Restaurant Ordering System - Next.js
+# EasyMenu - Next.js
 
 A comprehensive restaurant ordering system built with Next.js, Supabase, and Square API integration. Features include menu browsing, cart management, checkout with table/pickup selection, order tracking, Kitchen Display System (KDS), and Point of Sale (POS) system.
 

@@ -11,7 +11,22 @@ function resolveRestaurantId(restaurantId: string): string {
   return restaurantId
 }
 
-function toMenuItem(row: { id: string; restaurant_id: string; name: string; description: string | null; price: number; category: string; image: string | null; is_available: boolean }) {
+type MenuItemRow = {
+  id: string
+  restaurant_id: string
+  name: string
+  description: string | null
+  price: number
+  category: string
+  image: string | null
+  is_available: boolean
+  customizations?: unknown
+}
+
+function toMenuItem(row: MenuItemRow) {
+  const customizations = row.customizations != null && Array.isArray(row.customizations)
+    ? (row.customizations as { id: string; name: string; type: string; options: { id: string; name: string; price: number }[] }[])
+    : undefined
   return {
     id: row.id,
     restaurantId: row.restaurant_id,
@@ -21,6 +36,7 @@ function toMenuItem(row: { id: string; restaurant_id: string; name: string; desc
     category: row.category,
     image: row.image ?? '',
     isAvailable: row.is_available,
+    ...(customizations && customizations.length > 0 ? { customizations } : {}),
   }
 }
 
@@ -53,26 +69,30 @@ export async function GET(request: NextRequest) {
 export async function POST(request: NextRequest) {
   try {
     const body = await request.json()
-    const { restaurantId, name, description, price, category, image, isAvailable } = body
+    const { restaurantId, name, description, price, category, image, isAvailable, customizations } = body
     if (!restaurantId || !name || price == null) {
       return NextResponse.json({ error: 'restaurantId, name, and price are required' }, { status: 400 })
     }
     const rid = resolveRestaurantId(restaurantId)
+    const payload: Record<string, unknown> = {
+      restaurant_id: rid,
+      name: String(name).trim(),
+      description: description != null ? String(description).trim() : null,
+      price: Number(price),
+      category: category != null ? String(category).trim() || 'Other' : 'Other',
+      image: image != null ? String(image).trim() || null : null,
+      is_available: isAvailable !== false,
+    }
+    if (customizations != null && Array.isArray(customizations) && customizations.length > 0) {
+      payload.customizations = customizations
+    }
     const { data, error } = await supabase
       .from('menu_items')
-      .insert({
-        restaurant_id: rid,
-        name: String(name).trim(),
-        description: description != null ? String(description).trim() : null,
-        price: Number(price),
-        category: category != null ? String(category).trim() || 'Other' : 'Other',
-        image: image != null ? String(image).trim() || null : null,
-        is_available: isAvailable !== false
-      })
+      .insert(payload)
       .select()
       .single()
     if (error) throw error
-    const item = toMenuItem(data)
+    const item = toMenuItem(data as MenuItemRow)
     return NextResponse.json({ item })
   } catch (err: unknown) {
     console.error('POST menu-items error:', err)

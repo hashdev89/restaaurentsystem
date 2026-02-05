@@ -7,6 +7,7 @@ import { useCart } from '../providers/CartProvider'
 import { CartItem } from '../CartItem'
 import { Button } from '../ui/Button'
 import { Card } from '../ui/Card'
+import { gstAmount, addGst } from '@/lib/gst'
 
 export function Cart() {
   const { items, total, itemCount } = useCart()
@@ -56,22 +57,33 @@ export function Cart() {
             <Card className="lg:sticky lg:top-24">
               <h2 className="text-lg font-semibold text-gray-900 mb-4">Order Summary</h2>
 
+              <div className="mb-4 pb-4 border-b border-gray-200">
+                <h3 className="text-sm font-medium text-gray-700 mb-2">Items (incl. GST)</h3>
+                <ul className="space-y-1">
+                  {items.map((item) => (
+                    <li key={item.id} className="flex justify-between text-sm text-gray-600">
+                      <span>{item.quantity}x {item.name}</span>
+                      <span>A${(addGst(item.price * item.quantity)).toFixed(2)}</span>
+                    </li>
+                  ))}
+                </ul>
+              </div>
               <div className="space-y-3 mb-6">
                 <div className="flex justify-between text-gray-600">
-                  <span>Subtotal ({itemCount} items)</span>
-                  <span>A${total.toFixed(2)}</span>
+                  <span>Subtotal (incl. GST) — {itemCount} items</span>
+                  <span>A${addGst(total).toFixed(2)}</span>
                 </div>
                 <div className="flex justify-between text-gray-600">
-                  <span>Tax (10% GST)</span>
-                  <span>A${(total * 0.1).toFixed(2)}</span>
+                  <span>GST included (10%)</span>
+                  <span>A${gstAmount(total).toFixed(2)}</span>
                 </div>
                 <div className="flex justify-between text-gray-600">
-                  <span>Service fee (1%)</span>
-                  <span>A${(total * 0.01).toFixed(2)}</span>
+                  <span>Service fee</span>
+                  <span>A$1.00</span>
                 </div>
                 <div className="border-t border-gray-200 pt-3 flex justify-between font-bold text-lg text-gray-900">
-                  <span>Total</span>
-                  <span>A${(total * 1.11).toFixed(2)}</span>
+                  <span>TOTAL</span>
+                  <span>A${(addGst(total) + 1).toFixed(2)}</span>
                 </div>
               </div>
 

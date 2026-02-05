@@ -4,6 +4,7 @@ import { Minus, Plus, Trash2 } from 'lucide-react'
 import { CartItem as CartItemType } from '@/types'
 import { useCart } from './providers/CartProvider'
 import { Button } from './ui/Button'
+import { priceInclGst, gstAmount } from '@/lib/gst'
 
 interface CartItemProps {
   item: CartItemType
@@ -16,7 +17,8 @@ export function CartItem({ item }: CartItemProps) {
     <div className="flex items-center justify-between py-4 border-b border-gray-100 last:border-0">
       <div className="flex-1">
         <h4 className="font-medium text-gray-900">{item.name}</h4>
-        <p className="text-sm text-gray-500">${item.price.toFixed(2)} each</p>
+        <p className="text-sm text-gray-500">A${priceInclGst(item.price).toFixed(2)} each</p>
+        <p className="text-xs text-gray-400 mt-0.5">GST: A${(gstAmount(item.price) * item.quantity).toFixed(2)}</p>
       </div>
 
       <div className="flex items-center gap-3">
@@ -40,9 +42,9 @@ export function CartItem({ item }: CartItemProps) {
           </button>
         </div>
 
-        <div className="text-right min-w-[60px]">
+        <div className="text-right min-w-[80px]">
           <p className="font-medium text-gray-900">
-            ${(item.price * item.quantity).toFixed(2)}
+            A${(priceInclGst(item.price) * item.quantity).toFixed(2)}
           </p>
         </div>
 

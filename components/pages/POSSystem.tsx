@@ -17,6 +17,7 @@ import {
   Trash2,
   Check,
   DollarSign,
+  Wallet,
   Receipt,
   Printer,
   User,
@@ -29,16 +30,22 @@ import {
   Clock,
   TrendingUp,
   Pencil,
-  ScanBarcode
+  ScanBarcode,
+  Home,
+  Settings,
+  BarChart3,
+  Headphones
 } from 'lucide-react'
 import { useNotification } from '../providers/NotificationProvider'
 import { NotificationCenter } from '../NotificationCenter'
 import { Button } from '../ui/Button'
-import { Input } from '../ui/Input'
 import { Badge } from '../ui/Badge'
+import { Card } from '../ui/Card'
+import { POSKeyboardProvider, POSInput } from '../POSOnScreenKeyboard'
 import { Dialog, DialogContent } from '../ui/dialog'
 import { Tabs, TabsList, TabsTrigger } from '../ui/tabs'
 import { cn } from '@/lib/utils'
+import { GST_RATE, priceInclGst } from '@/lib/gst'
 import { normalizeOrders, type SupabaseOrderRow } from '@/lib/orders'
 import { OrderType, type Order } from '@/types'
 
@@ -99,7 +106,7 @@ interface CartItem {
   notes?: string
 }
 
-type PaymentMethod = 'card' | 'cash'
+type PaymentMethod = 'card' | 'cash' | 'mix'
 type DiscountType = 'percentage' | 'fixed'
 
 interface Discount {
@@ -138,9 +145,6 @@ interface POSTransaction {
   createdAt: string
   items: number
 }
-
-// GST constant (Australian GST is 10%)
-const GST_RATE = 0.1
 
 // Australian Restaurant Menu Data with Images
 const POS_CATEGORIES: POSCategory[] = [
@@ -452,9 +456,9 @@ const getDefaultCustomizations = (itemId: string, item?: POSSubItem): Customizat
   if (itemId.startsWith('burger_')) {
     return [
       {
-        id: 'add_toppings',
-        name: 'Add Toppings',
-        type: 'add',
+        id: 'extras',
+        name: 'Extras',
+        type: 'extra',
         options: [
           { id: 'extra_cheese', name: 'Extra Cheese', price: 2.00 },
           { id: 'extra_bacon', name: 'Extra Bacon', price: 3.00 },
@@ -465,8 +469,8 @@ const getDefaultCustomizations = (itemId: string, item?: POSSubItem): Customizat
         ]
       },
       {
-        id: 'remove_items',
-        name: 'Remove Items',
+        id: 'remove_options',
+        name: 'Remove options',
         type: 'remove',
         options: [
           { id: 'no_onion', name: 'No Onion', price: 0 },
@@ -484,9 +488,9 @@ const getDefaultCustomizations = (itemId: string, item?: POSSubItem): Customizat
   if (itemId.startsWith('pizza_')) {
     return [
       {
-        id: 'add_toppings',
-        name: 'Add Toppings',
-        type: 'add',
+        id: 'extras',
+        name: 'Extras',
+        type: 'extra',
         options: [
           { id: 'extra_cheese', name: 'Extra Cheese', price: 3.00 },
           { id: 'mushrooms', name: 'Mushrooms', price: 2.50 },
@@ -497,8 +501,8 @@ const getDefaultCustomizations = (itemId: string, item?: POSSubItem): Customizat
         ]
       },
       {
-        id: 'remove_items',
-        name: 'Remove Items',
+        id: 'remove_options',
+        name: 'Remove options',
         type: 'remove',
         options: [
           { id: 'no_onion', name: 'No Onion', price: 0 },
@@ -599,7 +603,7 @@ const getDefaultCustomizations = (itemId: string, item?: POSSubItem): Customizat
       {
         id: 'extras',
         name: 'Extras',
-        type: 'add',
+        type: 'extra',
         options: [
           { id: 'ice_cream', name: 'Ice Cream', price: 3.50 },
           { id: 'cream', name: 'Cream', price: 2.00 },
@@ -612,7 +616,34 @@ const getDefaultCustomizations = (itemId: string, item?: POSSubItem): Customizat
   return []
 }
 
-export function POSSystem() {
+/** Map API menu items (from Restaurant Dashboard) to POS categories + subItems. */
+function buildCategoriesFromMenuItems(items: { id: string; name: string; description: string; price: number; category: string; image: string; isAvailable: boolean; customizations?: CustomizationGroup[] }[]): POSCategory[] {
+  const byCategory = new Map<string, typeof items>()
+  for (const item of items) {
+    const cat = item.category?.trim() || 'Other'
+    if (!byCategory.has(cat)) byCategory.set(cat, [])
+    byCategory.get(cat)!.push(item)
+  }
+  return Array.from(byCategory.entries()).map(([name, catItems]) => ({
+    id: `cat_${name.replace(/\s+/g, '_')}`,
+    name,
+    icon: UtensilsCrossed,
+    color: 'text-gray-700',
+    bgColor: 'bg-gray-500',
+    subItems: catItems.map((i) => ({
+      id: i.id,
+      name: i.name,
+      description: i.description ?? '',
+      basePrice: Number(i.price) || 0,
+      image: i.image ?? '',
+      isAvailable: i.isAvailable !== false,
+      popular: false,
+      customizations: i.customizations && i.customizations.length > 0 ? i.customizations : undefined,
+    })),
+  }))
+}
+
+export function POSSystem({ restaurantId: restaurantIdProp }: { restaurantId?: string }) {
   const { success, warning } = useNotification()
   // State
   const [cart, setCart] = useState<CartItem[]>([])
@@ -630,19 +661,32 @@ export function POSSystem() {
   const [showClearConfirm, setShowClearConfirm] = useState(false)
   const [selectedCustomizations, setSelectedCustomizations] = useState<Record<string, string[]>>({})
   const [paymentMethod, setPaymentMethod] = useState<PaymentMethod>('card')
+  /** Cash received from customer (for change calculation when payment method is cash) */
+  const [cashTendered, setCashTendered] = useState('')
+  /** Mix payment: card portion (A$) and cash portion (A$); must sum to total */
+  const [mixCardAmount, setMixCardAmount] = useState('')
+  const [mixCashAmount, setMixCashAmount] = useState('')
   const [discount, setDiscount] = useState<Discount | null>(null)
   const [tip, setTip] = useState(0)
   const [tipPercentage, setTipPercentage] = useState<number | null>(null)
   const [orderNumber, setOrderNumber] = useState(1)
   const searchInputRef = useRef<HTMLInputElement>(null)
-  const [activeSection, setActiveSection] = useState<'menu' | 'orders' | 'transactions' | 'items' | 'more'>('menu')
+  const [activeSection, setActiveSection] = useState<'menu' | 'orders' | 'more'>('menu')
+  const [moreSubSection, setMoreSubSection] = useState<'main' | 'transactions' | 'items' | 'reports' | 'printTest' | 'dailySummary' | 'settings' | 'support'>('main')
+  const [posLanguage, setPosLanguage] = useState('en')
+  const [posCurrency, setPosCurrency] = useState('AUD')
+  const [posTimezone, setPosTimezone] = useState('Australia/Sydney')
+  const [supportMessage, setSupportMessage] = useState('')
+  const [supportType, setSupportType] = useState<'issue' | 'technical'>('issue')
+  const [supportSending, setSupportSending] = useState(false)
+  const [supportSent, setSupportSent] = useState(false)
   const [orders, setOrders] = useState<POSOrderSummary[]>([])
   const [pendingOrdersFromApi, setPendingOrdersFromApi] = useState<Order[]>([])
   const [pendingOrdersLoading, setPendingOrdersLoading] = useState(false)
   const [transactions, setTransactions] = useState<POSTransaction[]>([])
   const [showItemModal, setShowItemModal] = useState(false)
   const [editingItem, setEditingItem] = useState<POSSubItem | null>(null)
-  const [itemFormData, setItemFormData] = useState<Partial<POSSubItem> & { categoryId?: string }>({})
+  const [itemFormData, setItemFormData] = useState<Partial<POSSubItem> & { categoryId?: string; newCategoryName?: string; removeOptions?: CustomizationOption[]; extras?: CustomizationOption[] }>({})
   const [defaultRestaurantId, setDefaultRestaurantId] = useState<string>('')
   const [barcodeScanValue, setBarcodeScanValue] = useState('')
   const barcodeInputRef = useRef<HTMLInputElement>(null)
@@ -653,8 +697,74 @@ export function POSSystem() {
     POS_CATEGORIES.map(cat => ({ ...cat, subItems: cat.subItems.map(s => ({ ...s })) }))
   )
 
-  // Resolve default restaurant for order creation (env or first from API)
+  // POS access gate when linked to restaurant: enabled flag + optional 4-digit PIN
+  const [posAccess, setPosAccess] = useState<{ posEnabled: boolean; posPinRequired: boolean } | null>(null)
+  const [posPinVerified, setPosPinVerified] = useState(false)
+  const [posPinInput, setPosPinInput] = useState('')
+  const [posPinError, setPosPinError] = useState('')
+
+  // Surcharge settings from Restaurant Dashboard (Sunday / public holiday)
+  const [posSurcharge, setPosSurcharge] = useState<{
+    sundaySurchargeEnabled: boolean
+    sundaySurchargePercent: number
+    publicHolidaySurchargeEnabled: boolean
+    publicHolidaySurchargePercent: number
+    publicHolidayDates: string[]
+    surchargeManualOverride: 'auto' | 'sunday' | 'public_holiday' | 'none'
+  }>({
+    sundaySurchargeEnabled: false,
+    sundaySurchargePercent: 0,
+    publicHolidaySurchargeEnabled: false,
+    publicHolidaySurchargePercent: 0,
+    publicHolidayDates: [],
+    surchargeManualOverride: 'auto',
+  })
+
+  // When linked to a restaurant (e.g. /restaurant/[id]/pos), use that restaurant and load menu from API
+  const [menuSyncLoading, setMenuSyncLoading] = useState(false)
+  const fetchMenuFromApi = useCallback(async (rid: string) => {
+    setMenuSyncLoading(true)
+    try {
+      const res = await fetch(`/api/menu-items?restaurantId=${encodeURIComponent(rid)}`)
+      if (!res.ok) return
+      const data = await res.json()
+      const items = data.items ?? []
+      const built = buildCategoriesFromMenuItems(items)
+      setCategories(built)
+    } catch (e) {
+      console.error('POS fetch menu error:', e)
+    } finally {
+      setMenuSyncLoading(false)
+    }
+  }, [])
+
   useEffect(() => {
+    if (restaurantIdProp) {
+      setDefaultRestaurantId(restaurantIdProp)
+      fetchMenuFromApi(restaurantIdProp)
+      setPosPinVerified(false)
+      setPosAccess(null)
+      fetch(`/api/restaurants/${restaurantIdProp}`)
+        .then((res) => res.ok ? res.json() : null)
+        .then((data) => {
+          const r = data?.restaurant
+          if (r) {
+            setPosAccess({ posEnabled: r.posEnabled !== false, posPinRequired: r.posPinRequired === true })
+            setPosSurcharge({
+              sundaySurchargeEnabled: r.sundaySurchargeEnabled === true,
+              sundaySurchargePercent: Number(r.sundaySurchargePercent) || 0,
+              publicHolidaySurchargeEnabled: r.publicHolidaySurchargeEnabled === true,
+              publicHolidaySurchargePercent: Number(r.publicHolidaySurchargePercent) || 0,
+              publicHolidayDates: Array.isArray(r.publicHolidayDates) ? r.publicHolidayDates : [],
+              surchargeManualOverride: r.surchargeManualOverride === 'sunday' || r.surchargeManualOverride === 'public_holiday' || r.surchargeManualOverride === 'none' ? r.surchargeManualOverride : 'auto',
+            })
+          }
+        })
+        .catch(() => setPosAccess({ posEnabled: true, posPinRequired: false }))
+      return
+    }
+    setPosAccess(null)
+    setPosPinVerified(false)
     const envId = typeof process !== 'undefined' && process.env ? process.env.NEXT_PUBLIC_DEFAULT_RESTAURANT_ID : undefined
     if (envId) {
       setDefaultRestaurantId(envId)
@@ -669,7 +779,28 @@ export function POSSystem() {
       })
       .catch(() => { /* ignore */ })
     return () => { cancelled = true }
-  }, [])
+  }, [restaurantIdProp, fetchMenuFromApi])
+
+  // Load surcharge settings when defaultRestaurantId is set (e.g. from env or list, not from URL)
+  useEffect(() => {
+    if (!defaultRestaurantId || restaurantIdProp) return
+    fetch(`/api/restaurants/${defaultRestaurantId}`)
+      .then((res) => res.ok ? res.json() : null)
+      .then((data) => {
+        const r = data?.restaurant
+        if (r) {
+          setPosSurcharge({
+            sundaySurchargeEnabled: r.sundaySurchargeEnabled === true,
+            sundaySurchargePercent: Number(r.sundaySurchargePercent) || 0,
+            publicHolidaySurchargeEnabled: r.publicHolidaySurchargeEnabled === true,
+            publicHolidaySurchargePercent: Number(r.publicHolidaySurchargePercent) || 0,
+            publicHolidayDates: Array.isArray(r.publicHolidayDates) ? r.publicHolidayDates : [],
+            surchargeManualOverride: r.surchargeManualOverride === 'sunday' || r.surchargeManualOverride === 'public_holiday' || r.surchargeManualOverride === 'none' ? r.surchargeManualOverride : 'auto',
+          })
+        }
+      })
+      .catch(() => { /* ignore */ })
+  }, [defaultRestaurantId, restaurantIdProp])
 
   // Only show loading spinner on first fetch for Orders tab; background refresh stays silent
   const ordersInitialLoadDone = useRef(false)
@@ -718,9 +849,9 @@ export function POSSystem() {
     return items.filter(item => item.isAvailable)
   }, [selectedCategory, searchQuery, categories])
 
-  // Get available item count for each category
+  // Get available item count for each category (use current categories so API-synced menu works)
   const getCategoryItemCount = (categoryId: string) => {
-    const category = POS_CATEGORIES.find(cat => cat.id === categoryId)
+    const category = categories.find(cat => cat.id === categoryId)
     return category ? category.subItems.filter(item => item.isAvailable).length : 0
   }
 
@@ -753,8 +884,32 @@ export function POSSystem() {
     return discount.value
   }, [discount, subtotalInclGst])
 
+  // Which surcharge applies today (from Restaurant Dashboard settings)
+  const surchargeApplied = useMemo(() => {
+    const override = posSurcharge.surchargeManualOverride
+    const today = new Date()
+    const todayStr = today.getFullYear() + '-' + String(today.getMonth() + 1).padStart(2, '0') + '-' + String(today.getDate()).padStart(2, '0')
+    const isSunday = today.getDay() === 0
+    const isPublicHoliday = posSurcharge.publicHolidayDates.includes(todayStr)
+
+    if (override === 'none') return null
+    if (override === 'sunday' && posSurcharge.sundaySurchargeEnabled) return { label: 'Sunday surcharge', percent: posSurcharge.sundaySurchargePercent }
+    if (override === 'public_holiday' && posSurcharge.publicHolidaySurchargeEnabled) return { label: 'Public holiday surcharge', percent: posSurcharge.publicHolidaySurchargePercent }
+    if (override === 'auto') {
+      if (isPublicHoliday && posSurcharge.publicHolidaySurchargeEnabled) return { label: 'Public holiday surcharge', percent: posSurcharge.publicHolidaySurchargePercent }
+      if (isSunday && posSurcharge.sundaySurchargeEnabled) return { label: 'Sunday surcharge', percent: posSurcharge.sundaySurchargePercent }
+    }
+    return null
+  }, [posSurcharge])
+
+  const subtotalAfterDiscount = subtotalInclGst - discountAmount
+  const surchargeAmount = useMemo(() => {
+    if (!surchargeApplied) return 0
+    return subtotalAfterDiscount * (surchargeApplied.percent / 100)
+  }, [surchargeApplied, subtotalAfterDiscount])
+
   const total = useMemo(() => 
-    subtotalInclGst - discountAmount + tip, [subtotalInclGst, discountAmount, tip]
+    subtotalAfterDiscount + surchargeAmount, [subtotalAfterDiscount, surchargeAmount]
   )
 
   // Quick add to cart (no customization) - increments quantity if item exists
@@ -1196,82 +1351,80 @@ export function POSSystem() {
 </head>
 <body>
   <div class="receipt">
-    <div class="header">
-      <div class="business-name">RESTAURANT POS</div>
-      <div class="business-info">123 Main Street</div>
-      <div class="business-info">Sydney, NSW 2000</div>
-      <div class="business-info">Phone: (02) 1234 5678</div>
+    <div class="divider">------------------------------------------</div>
+    <div class="header" style="text-align: center;">
+      <div class="business-name">Receipt</div>
+    </div>
+    <div class="divider">------------------------------------------</div>
+    <div class="business-info" style="text-align: center;">
+      <div class="business-info">ABC Retail Pty Ltd</div>
       <div class="business-info">ABN: 12 345 678 901</div>
+      <div class="order-info-row"><span>Date:</span><span>${new Date().toLocaleDateString('en-AU', { day: '2-digit', month: 'short', year: 'numeric' })}</span></div>
+      <div class="order-info-row"><span>Receipt No:</span><span>POS-${orderNumber}</span></div>
     </div>
+    <div class="divider">------------------------------------------</div>
 
-    <div class="order-info">
-      <div class="order-info-row">
-        <span>Order #:</span>
-        <span><strong>${orderNumber}</strong></span>
-      </div>
-      <div class="order-info-row">
-        <span>Date:</span>
-        <span>${currentDate}</span>
-      </div>
-      <div class="order-info-row">
-        <span>Type:</span>
-        <span>${orderType === 'dine-in' ? 'Dine In' : orderType === 'pickup' ? 'Pickup' : 'Delivery'}</span>
-      </div>
-      ${orderType === 'dine-in' && tableNumber ? `
-      <div class="order-info-row">
-        <span>Table:</span>
-        <span><strong>${tableNumber}</strong></span>
-      </div>
-      ` : ''}
-      ${customerName ? `
-      <div class="order-info-row">
-        <span>Customer:</span>
-        <span>${customerName}</span>
-      </div>
-      ` : ''}
-    </div>
+    <table class="item-table" style="width:100%; font-size: 11px; border-collapse: collapse;">
+      <thead>
+        <tr>
+          <th style="text-align:left;">Item</th>
+          <th style="text-align:center;">Qty</th>
+          <th style="text-align:right;">Price</th>
+        </tr>
+      </thead>
+      <tbody>
+    ${cart.map(item => {
+      const itemPriceInclGst = item.finalPrice
+      const lineTotal = itemPriceInclGst * item.quantity
+      const safeName = (item.name || '').replace(/</g, '&lt;').replace(/>/g, '&gt;')
+      const customizationsHtml = (item.customizations && item.customizations.length > 0)
+        ? item.customizations.map(c => {
+            const safeOpts = (c.optionNames || []).map(n => (n || '').replace(/</g, '&lt;').replace(/>/g, '&gt;')).filter(Boolean)
+            const optsText = safeOpts.join(', ')
+            const isRemove = (c.groupName || '').toLowerCase().includes('remove')
+            if (isRemove && optsText) {
+              return `<div class="item-details">Remove: ${optsText}</div>`
+            }
+            if (optsText) {
+              const extraInclGst = c.totalPrice * (1 + GST_RATE)
+              const pricePart = c.totalPrice > 0 ? ` (+$${extraInclGst.toFixed(2)})` : ''
+              return `<div class="item-details">Add: ${optsText}${pricePart}</div>`
+            }
+            return ''
+          }).filter(Boolean).join('')
+        : ''
+      return `<tr>
+        <td style="text-align:left; vertical-align: top;">
+          <span class="item-name">${safeName}</span> (incl. GST)
+          ${customizationsHtml}
+        </td>
+        <td style="text-align:center; vertical-align: top;">${item.quantity}</td>
+        <td style="text-align:right; vertical-align: top;">$${lineTotal.toFixed(2)}</td>
+      </tr>`
+    }).join('')}
+      </tbody>
+    </table>
 
-    <div class="divider">━━━━━━━━━━━━━━━━━━━━</div>
-
-    <div class="items">
-      ${cart.map(item => {
-        const itemPriceInclGst = item.finalPrice
-        return `
-        <div class="item-row">
-          <div class="item-name">${item.quantity}x ${item.name}</div>
-          ${item.customizations.length > 0 ? `
-          <div class="item-details">
-            ${item.customizations.map(c => `  ${c.groupName}: ${c.optionNames.join(', ')}`).join('<br>')}
-          </div>
-          ` : ''}
-          <div class="item-qty-price">
-            <span>@ A$${itemPriceInclGst.toFixed(2)} (incl GST)</span>
-            <span><strong>A$${(itemPriceInclGst * item.quantity).toFixed(2)}</strong></span>
-          </div>
-        </div>
-        `
-      }).join('')}
-    </div>
-
-    <div class="divider">━━━━━━━━━━━━━━━━━━━━</div>
-
+    <div class="divider">------------------------------------------</div>
     <div class="totals">
       <div class="total-row">
-        <span>Subtotal (ex GST):</span>
-        <span>A$${subtotalExGst.toFixed(2)}</span>
+        <span>Subtotal (incl. GST)</span>
+        <span>A$${subtotalInclGst.toFixed(2)}</span>
       </div>
       <div class="total-row gst">
-        <span>GST (10%):</span>
+        <span>GST included (10%)</span>
         <span>A$${totalGst.toFixed(2)}</span>
-      </div>
-      <div class="total-row">
-        <span>Subtotal (incl GST):</span>
-        <span>A$${subtotalInclGst.toFixed(2)}</span>
       </div>
       ${discount ? `
       <div class="total-row" style="color: green;">
         <span>Discount${discount.name ? ` (${discount.name})` : ''}:</span>
         <span>-A$${discountAmount.toFixed(2)}</span>
+      </div>
+      ` : ''}
+      ${surchargeApplied ? `
+      <div class="total-row">
+        <span>${surchargeApplied.label} (${surchargeApplied.percent}%):</span>
+        <span>A$${surchargeAmount.toFixed(2)}</span>
       </div>
       ` : ''}
       ${tip > 0 ? `
@@ -1281,7 +1434,7 @@ export function POSSystem() {
       </div>
       ` : ''}
       <div class="total-row final">
-        <span>TOTAL:</span>
+        <span>TOTAL</span>
         <span>A$${total.toFixed(2)}</span>
       </div>
     </div>
@@ -1289,12 +1442,39 @@ export function POSSystem() {
     <div class="payment-info">
       <div class="payment-row">
         <span>Payment Method:</span>
-        <span><strong>${paymentMethod === 'card' ? 'CARD' : 'CASH'}</strong></span>
+        <span><strong>${paymentMethod === 'card' ? 'CARD' : paymentMethod === 'mix' ? 'MIX (CARD + CASH)' : 'CASH'}</strong></span>
       </div>
       <div class="payment-row">
         <span>Amount Paid:</span>
         <span><strong>A$${total.toFixed(2)}</strong></span>
       </div>
+      ${paymentMethod === 'mix' ? (() => {
+        const cardAmt = parseFloat(typeof mixCardAmount === 'string' ? mixCardAmount : '0') || 0
+        const cashAmt = parseFloat(typeof mixCashAmount === 'string' ? mixCashAmount : '0') || 0
+        return `
+      <div class="payment-row">
+        <span>Card:</span>
+        <span><strong>A$${cardAmt.toFixed(2)}</strong></span>
+      </div>
+      <div class="payment-row">
+        <span>Cash:</span>
+        <span><strong>A$${cashAmt.toFixed(2)}</strong></span>
+      </div>`
+      })() : ''}
+      ${(paymentMethod === 'cash' || paymentMethod === 'mix') && cashTendered ? (() => {
+        const cashPortion = paymentMethod === 'mix' ? (parseFloat(mixCashAmount) || 0) : total
+        const received = parseFloat(cashTendered) || 0
+        const change = Math.max(0, received - cashPortion)
+        return `
+      <div class="payment-row">
+        <span>Cash Given:</span>
+        <span><strong>A$${received.toFixed(2)}</strong></span>
+      </div>
+      <div class="payment-row">
+        <span>Change Given:</span>
+        <span><strong>A$${change.toFixed(2)}</strong></span>
+      </div>`
+      })() : ''}
       <div class="payment-row">
         <span>Status:</span>
         <span><strong>PAID</strong></span>
@@ -1317,7 +1497,7 @@ export function POSSystem() {
       </div>
     </div>
 
-    <div class="divider">━━━━━━━━━━━━━━━━━━━━</div>
+    <div class="divider">------------------------------------------</div>
   </div>
 </body>
 </html>
@@ -1333,7 +1513,7 @@ export function POSSystem() {
       // Optionally close after printing (uncomment if desired)
       // receiptWindow.close()
     }, 250)
-  }, [cart, orderNumber, orderType, tableNumber, customerName, subtotalExGst, totalGst, subtotalInclGst, discount, discountAmount, tip, tipPercentage, total, paymentMethod, orderNotes])
+  }, [cart, orderNumber, orderType, tableNumber, customerName, subtotalExGst, totalGst, subtotalInclGst, discount, discountAmount, tip, tipPercentage, total, paymentMethod, orderNotes, cashTendered, mixCardAmount, mixCashAmount])
 
   const handleTip = (percentage: number) => {
     setTipPercentage(percentage)
@@ -1348,10 +1528,6 @@ export function POSSystem() {
 
   const handlePayment = async () => {
     if (cart.length === 0) return
-    if (orderType === 'dine-in' && !tableNumber) {
-      alert('Please enter a table number')
-      return
-    }
 
     setIsProcessing(true)
 
@@ -1401,6 +1577,8 @@ export function POSSystem() {
         setOrderNumber(prev => prev + 1)
         setShowPaymentModal(false)
         setPaymentMethod('card')
+        setMixCardAmount('')
+        setMixCashAmount('')
         setIsProcessing(false)
         return
       }
@@ -1480,7 +1658,7 @@ export function POSSystem() {
       setOrders(prev => [newOrder, ...prev])
       setTransactions(prev => [newTransaction, ...prev])
 
-      alert(`✅ Order Processed Successfully!\n\nOrder #${orderNumber}\nSubtotal (ex GST): A$${subtotalExGst.toFixed(2)}\nGST (10%): A$${totalGst.toFixed(2)}\nTotal (incl GST): A$${total.toFixed(2)}\nPayment Method: ${paymentMethod.toUpperCase()} (BYPASSED FOR TESTING)\n\nReceipt will be printed automatically.`)
+      alert(`✅ Order Processed Successfully!\n\nOrder #${orderNumber}\nSubtotal (incl. GST): A$${subtotalInclGst.toFixed(2)}\nGST included (10%): A$${totalGst.toFixed(2)}\nTOTAL: A$${total.toFixed(2)}\nPayment Method: ${paymentMethod.toUpperCase()} (BYPASSED FOR TESTING)\n\nReceipt will be printed automatically.`)
 
       setCart([])
       setTableNumber('')
@@ -1492,6 +1670,8 @@ export function POSSystem() {
       setOrderNumber(prev => prev + 1)
       setShowPaymentModal(false)
       setPaymentMethod('card')
+      setMixCardAmount('')
+      setMixCashAmount('')
     } catch (error) {
       console.error('Payment error:', error)
       alert(`Payment failed: ${error instanceof Error ? error.message : 'Unknown error'}`)
@@ -1576,7 +1756,7 @@ export function POSSystem() {
     }
   }
 
-  const handleSaveItem = (data: Partial<POSSubItem> & { categoryId?: string }) => {
+  const handleSaveItem = async (data: Partial<POSSubItem> & { categoryId?: string; newCategoryName?: string; removeOptions?: CustomizationOption[]; extras?: CustomizationOption[] }) => {
     const categoryId = data.categoryId ?? categories[0]?.id ?? ''
     const name = (data.name ?? '').trim()
     const description = (data.description ?? '').trim()
@@ -1584,6 +1764,66 @@ export function POSSystem() {
     const image = (data.image ?? '').trim() || 'https://images.unsplash.com/photo-1546069901-ba9599a7e63c?w=800&q=80'
     const isAvailable = data.isAvailable !== false
     const popular = data.popular === true
+    const removeOptions = (data.removeOptions ?? []).filter((o) => (o.name ?? '').trim())
+    const extras = (data.extras ?? []).filter((o) => (o.name ?? '').trim())
+    const customizations: CustomizationGroup[] = []
+    if (removeOptions.length > 0) {
+      customizations.push({ id: 'remove_options', name: 'Remove options', type: 'remove', options: removeOptions.map((o, i) => ({ id: o.id || `rem_${i}`, name: o.name.trim(), price: 0 })) })
+    }
+    if (extras.length > 0) {
+      customizations.push({ id: 'extras', name: 'Extras', type: 'extra', options: extras.map((o, i) => ({ id: o.id || `ext_${i}`, name: o.name.trim(), price: Number(o.price) || 0 })) })
+    }
+
+    const isNewCategory = categoryId === '__new__' && (data.newCategoryName ?? '').trim()
+    const newCatName = isNewCategory ? (data.newCategoryName ?? '').trim() : ''
+
+    // When POS is linked to a restaurant, sync to API (Restaurant Dashboard is source of truth; POS can add/edit)
+    if (restaurantIdProp && defaultRestaurantId) {
+      try {
+        if (editingItem) {
+          const res = await fetch(`/api/menu-items/${editingItem.id}`, {
+            method: 'PATCH',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({
+              name,
+              description,
+              price: basePrice,
+              category: categories.find((c) => c.subItems.some((s) => s.id === editingItem.id))?.name ?? 'Other',
+              image,
+              isAvailable,
+              customizations: customizations.length > 0 ? customizations : undefined,
+            }),
+          })
+          if (!res.ok) throw new Error('Update failed')
+          success('Item updated', 'Menu synced to Restaurant Dashboard.')
+        } else {
+          const res = await fetch('/api/menu-items', {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({
+              restaurantId: defaultRestaurantId,
+              name,
+              description,
+              price: basePrice,
+              category: isNewCategory ? newCatName : (categories.find((c) => c.id === categoryId)?.name ?? 'Other'),
+              image,
+              isAvailable,
+              customizations: customizations.length > 0 ? customizations : undefined,
+            }),
+          })
+          if (!res.ok) throw new Error('Create failed')
+          success('Item added', 'Menu synced to Restaurant Dashboard.')
+        }
+        fetchMenuFromApi(defaultRestaurantId)
+      } catch (e) {
+        warning('Sync failed', e instanceof Error ? e.message : 'Could not save to Restaurant Dashboard.')
+        return
+      }
+      setShowItemModal(false)
+      setEditingItem(null)
+      setItemFormData({})
+      return
+    }
 
     if (editingItem) {
       setCategories((prev) =>
@@ -1591,11 +1831,27 @@ export function POSSystem() {
           ...cat,
           subItems: cat.subItems.map((s) =>
             s.id === editingItem.id
-              ? { ...s, name, description, basePrice, image, isAvailable, popular }
+              ? { ...s, name, description, basePrice, image, isAvailable, popular, customizations: customizations.length > 0 ? customizations : undefined }
               : s
           ),
         }))
       )
+    } else if (isNewCategory) {
+      const newCatId = `cat_${Date.now()}`
+      const newItem: POSSubItem = {
+        id: `item_${Date.now()}`,
+        name,
+        description,
+        basePrice,
+        image,
+        isAvailable,
+        popular,
+        customizations: customizations.length > 0 ? customizations : undefined,
+      }
+      setCategories((prev) => [
+        ...prev,
+        { id: newCatId, name: newCatName, icon: UtensilsCrossed, color: 'text-gray-700', bgColor: 'bg-gray-500', subItems: [newItem] },
+      ])
     } else {
       const newItem: POSSubItem = {
         id: `item_${Date.now()}`,
@@ -1605,6 +1861,7 @@ export function POSSystem() {
         image,
         isAvailable,
         popular,
+        customizations: customizations.length > 0 ? customizations : undefined,
       }
       setCategories((prev) =>
         prev.map((cat) =>
@@ -1625,7 +1882,56 @@ export function POSSystem() {
     setItemFormData({})
   }
 
+  // Gate: when linked to restaurant, check enabled + 4-digit PIN
+  if (restaurantIdProp) {
+    if (posAccess === null) {
+      return (
+        <div className="fixed inset-0 flex items-center justify-center bg-gray-100 p-4">
+          <Card className="p-8 max-w-md text-center">
+            <p className="text-gray-600">Loading POS…</p>
+          </Card>
+        </div>
+      )
+    }
+    if (!posAccess.posEnabled) {
+      return (
+        <div className="fixed inset-0 flex items-center justify-center bg-gray-100 p-4">
+          <Card className="p-8 max-w-md text-center">
+            <h2 className="text-xl font-semibold text-gray-900 mb-2">POS disabled</h2>
+            <p className="text-gray-600">System Control has turned off POS for this restaurant.</p>
+          </Card>
+        </div>
+      )
+    }
+    if (!posPinVerified) {
+      const handlePosPinSubmit = async (e: React.FormEvent) => {
+        e.preventDefault()
+        const pin = posPinInput.replace(/\D/g, '').slice(0, 4)
+        if (pin.length !== 4) { setPosPinError('Enter 4 digits'); return }
+        setPosPinError('')
+        const res = await fetch(`/api/restaurants/${restaurantIdProp}/verify-pin`, { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ pin, type: 'pos' }) })
+        const data = await res.json().catch(() => ({}))
+        if (data.valid) setPosPinVerified(true)
+        else setPosPinError('Wrong PIN')
+      }
+      return (
+        <div className="fixed inset-0 flex items-center justify-center bg-gray-100 p-4">
+          <Card className="p-8 max-w-md">
+            <h2 className="text-xl font-semibold text-gray-900 mb-2">POS access</h2>
+            <p className="text-sm text-gray-500 mb-4">Enter 4-digit PIN</p>
+            <form onSubmit={handlePosPinSubmit} className="space-y-3">
+              <input type="password" inputMode="numeric" maxLength={4} value={posPinInput} onChange={(e) => { setPosPinInput(e.target.value.replace(/\D/g, '').slice(0, 4)); setPosPinError('') }} placeholder="••••" className="w-full rounded-md border border-gray-300 px-4 py-3 text-center text-2xl tracking-widest" autoComplete="off" />
+              {posPinError && <p className="text-sm text-red-600">{posPinError}</p>}
+              <Button type="submit" className="w-full">Unlock POS</Button>
+            </form>
+          </Card>
+        </div>
+      )
+    }
+  }
+
   return (
+    <POSKeyboardProvider>
     <div className="fixed inset-0 flex flex-col bg-gray-50 overflow-hidden">
       {/* Compact Header */}
       <div className="bg-white border-b-2 border-gray-200 px-6 py-3 flex-shrink-0">
@@ -1650,36 +1956,21 @@ export function POSSystem() {
           </div>
           <div className="flex items-center gap-3">
             <NotificationCenter className="mr-1" />
-            <Button
-              variant={cart.length > 0 ? 'danger' : 'ghost'}
-              size="sm"
-              onClick={openClearConfirm}
-              disabled={cart.length === 0}
-              title={cart.length === 0 ? 'Cart is empty' : 'Clear current order'}
-              className={cn(
-                'min-w-[200px] py-4 px-6 text-base font-semibold',
-                cart.length > 0 && 'shadow-md hover:shadow-lg',
-                cart.length === 0 && 'opacity-60 cursor-not-allowed'
-              )}
-            >
-              <Trash2 className="w-6 h-6 mr-3" />
-              Clear order
-            </Button>
           </div>
         </div>
       </div>
 
-      <div className="flex-1 flex overflow-hidden">
+      <div className="flex-1 flex min-h-0 overflow-hidden">
         {/* Conditional Section Rendering */}
         {activeSection === 'menu' && (
           <>
-            {/* Left Panel - Menu (70%) */}
-            <div className="w-[70%] flex flex-col bg-white border-r-2 border-gray-200">
+            {/* Left Panel - Menu (separate from cart) */}
+            <div className="w-[65%] min-w-0 flex-shrink-0 flex flex-col min-h-0 bg-white border-r-2 border-gray-200">
           {/* Search and Categories */}
           <div className="p-4 border-b border-gray-200 flex-shrink-0 bg-gray-50">
             <div className="relative mb-3">
                   <Search className="absolute left-3 top-1/2 -translate-y-1/2 text-gray-400 w-5 h-5" />
-                  <Input
+                  <POSInput
                 ref={searchInputRef}
                 placeholder="Search items... (Ctrl+K)"
                 className="pl-10 h-12 text-base"
@@ -1825,8 +2116,26 @@ export function POSSystem() {
           )}
         </div>
 
-        {/* Right Panel - Cart (30%) */}
-        <div className="w-[30%] flex flex-col bg-gray-50 border-l-2 border-gray-200">
+        {/* Right Panel - Cart: full width of column, full height to bottom for more items */}
+        <div className="w-[35%] min-w-[280px] flex-shrink-0 flex flex-col min-h-0 bg-gray-50 border-l-2 border-gray-200">
+          {/* Clear order - top right of cart */}
+          <div className="flex justify-end px-4 py-2 bg-white border-b border-gray-200 flex-shrink-0">
+            <Button
+              variant={cart.length > 0 ? 'danger' : 'ghost'}
+              size="sm"
+              onClick={openClearConfirm}
+              disabled={cart.length === 0}
+              title={cart.length === 0 ? 'Cart is empty' : 'Clear current order'}
+              className={cn(
+                'text-sm font-semibold',
+                cart.length > 0 && 'shadow-sm',
+                cart.length === 0 && 'opacity-60 cursor-not-allowed'
+              )}
+            >
+              <Trash2 className="w-4 h-4 mr-2" />
+              Clear order
+            </Button>
+          </div>
           {orderIdForBilling && (
             <div className="px-4 py-2 bg-green-100 border-b border-green-300 text-green-800 text-sm font-medium flex-shrink-0">
               Billing for customer order — complete checkout to mark as completed.
@@ -1839,7 +2148,7 @@ export function POSSystem() {
               Scan barcode
             </label>
             <div className="flex gap-2">
-              <Input
+              <POSInput
                 ref={barcodeInputRef}
                 type="text"
                 placeholder="Scan or type barcode, then Enter"
@@ -1860,8 +2169,8 @@ export function POSSystem() {
               </Button>
             </div>
           </div>
-          {/* Cart Items - Scrollable */}
-          <div className="flex-1 overflow-y-auto p-4">
+          {/* Cart Items - Scrollable (more padding for space) */}
+          <div className="flex-1 overflow-y-auto p-5 min-h-0">
                 {cart.length === 0 ? (
               <div className="text-center py-12">
                 <ShoppingCart className="w-16 h-16 text-gray-300 mx-auto mb-4" />
@@ -1871,174 +2180,57 @@ export function POSSystem() {
             ) : (
               <div className="space-y-3">
                 {cart.map((item) => (
-                  <div key={item.id} className="bg-white rounded-xl p-4 border-2 border-gray-200 shadow-sm">
-                    <div className="flex items-start justify-between mb-3">
-                      <div className="flex-1 min-w-0">
-                        <div className="flex items-center gap-2 mb-1">
-                          <p className="font-bold text-gray-900 text-base">{item.name}</p>
-                          {item.quantity > 1 && (
-                            <Badge variant="info" className="text-xs">
-                              x{item.quantity}
-                            </Badge>
-                          )}
-                        </div>
-                        {item.customizations.length > 0 && (
-                          <div className="mt-1 space-y-0.5">
-                            {item.customizations.map((custom, idx) => (
-                              <p key={idx} className="text-xs text-gray-600">
-                                {custom.groupName}: {custom.optionNames.join(', ')}
-                              </p>
-                            ))}
-                          </div>
-                        )}
-                        <p className="text-xs text-gray-500 mt-1">A${item.finalPrice.toFixed(2)} each (incl. GST)</p>
-                        <p className="text-xs text-gray-400 mt-0.5">GST: A${(item.gstAmount * item.quantity).toFixed(2)}</p>
-                      </div>
-                      <button
-                        onClick={() => removeFromCart(item.id)}
-                        className="text-gray-400 hover:text-red-500 ml-2 flex-shrink-0 p-2 active:scale-95 transition-transform"
-                      >
-                        <X className="w-6 h-6" />
-                      </button>
-                    </div>
-                    <div className="flex items-center justify-between pt-3 border-t border-gray-100">
-                      <div className="flex items-center gap-3">
+                  <div key={item.id} className="bg-white rounded-lg px-4 py-3 min-h-[52px] border border-gray-200 shadow-sm">
+                    {/* Inline: name, quantity, price, remove */}
+                    <div className="flex items-center gap-2 flex-wrap">
+                      <p className="font-semibold text-gray-900 text-sm min-w-0 flex-1 truncate" title={item.name}>
+                        {item.name}
+                      </p>
+                      <div className="flex items-center gap-1 flex-shrink-0">
                         <button
                           onClick={() => updateQuantity(item.id, item.quantity - 1)}
-                          className="w-12 h-12 rounded-xl bg-gray-100 hover:bg-gray-200 flex items-center justify-center transition-colors active:scale-95 shadow-sm"
+                          className="w-8 h-8 rounded-lg bg-gray-100 hover:bg-gray-200 flex items-center justify-center transition-colors active:scale-95"
                         >
-                          <Minus className="w-5 h-5" />
+                          <Minus className="w-4 h-4" />
                         </button>
-                        <span className="w-12 text-center font-bold text-xl">{item.quantity}</span>
+                        <span className="w-7 text-center font-bold text-sm tabular-nums">{item.quantity}</span>
                         <button
                           onClick={() => updateQuantity(item.id, item.quantity + 1)}
-                          className="w-12 h-12 rounded-xl bg-gray-100 hover:bg-gray-200 flex items-center justify-center transition-colors active:scale-95 shadow-sm"
+                          className="w-8 h-8 rounded-lg bg-gray-100 hover:bg-gray-200 flex items-center justify-center transition-colors active:scale-95"
                         >
-                          <Plus className="w-5 h-5" />
+                          <Plus className="w-4 h-4" />
                         </button>
                       </div>
-                      <p className="font-bold text-gray-900 text-xl">
+                      <p className="font-bold text-orange-600 text-sm tabular-nums w-16 text-right flex-shrink-0">
                         A${(item.finalPrice * item.quantity).toFixed(2)}
                       </p>
+                      <button
+                        onClick={() => removeFromCart(item.id)}
+                        className="w-9 h-9 rounded-lg flex items-center justify-center flex-shrink-0 text-red-500 hover:text-white hover:bg-red-500 border-2 border-red-200 bg-red-50 transition-colors active:scale-95"
+                        title="Remove"
+                        aria-label="Remove"
+                      >
+                        <X className="w-5 h-5 stroke-[2.5]" />
+                      </button>
                     </div>
+                    {item.customizations.length > 0 && (
+                      <div className="text-xs text-gray-600 mt-1.5 space-y-0.5">
+                        {item.customizations.map((c) => {
+                          const opts = c.optionNames.filter(Boolean).join(', ')
+                          if (!opts) return null
+                          const isRemove = (c.groupName || '').toLowerCase().includes('remove')
+                          if (isRemove) return <p key={c.groupId} className="truncate">Remove: {opts}</p>
+                          const addLabel = c.totalPrice > 0 ? `Add: ${opts} (+A$${c.totalPrice.toFixed(2)})` : `Add: ${opts}`
+                          return <p key={c.groupId} className="truncate">{addLabel}</p>
+                        })}
+                      </div>
+                    )}
                   </div>
                 ))}
               </div>
             )}
           </div>
 
-          {/* Totals & Actions - Fixed at bottom */}
-          <div className="p-4 bg-white border-t-2 border-gray-200 flex-shrink-0 space-y-3">
-            {/* Quick Actions */}
-            <div className="grid grid-cols-2 gap-3">
-              <Button
-                variant="secondary"
-                size="sm"
-                onClick={() => setShowDiscountModal(true)}
-                className="h-14 text-base font-semibold"
-              >
-                <Percent className="w-5 h-5 mr-2" />
-                Discount
-              </Button>
-              <Button
-                variant="secondary"
-                size="sm"
-                onClick={() => {
-                  const notes = prompt('Order notes:', orderNotes)
-                  if (notes !== null) setOrderNotes(notes)
-                }}
-                className="h-14 text-base font-semibold"
-              >
-                <MessageSquare className="w-5 h-5 mr-2" />
-                Notes
-              </Button>
-            </div>
-
-              {/* Totals */}
-            <div className="space-y-1.5 bg-gray-50 rounded-lg p-3">
-              <div className="flex justify-between text-gray-600 text-sm">
-                  <span>Subtotal (ex GST)</span>
-                  <span>A${subtotalExGst.toFixed(2)}</span>
-              </div>
-              <div className="flex justify-between text-gray-600 text-sm">
-                <span>GST (10%)</span>
-                <span>A${totalGst.toFixed(2)}</span>
-              </div>
-              <div className="flex justify-between text-gray-700 text-sm font-semibold">
-                  <span>Subtotal (incl GST)</span>
-                  <span>A${subtotalInclGst.toFixed(2)}</span>
-              </div>
-              {discount && (
-                <div className="flex justify-between text-green-600 text-sm font-semibold">
-                  <span>Discount {discount.name && `(${discount.name})`}</span>
-                  <span>-A${discountAmount.toFixed(2)}</span>
-                </div>
-              )}
-              {tip > 0 && (
-                <div className="flex justify-between text-gray-600 text-sm">
-                  <span>Tip {tipPercentage && `(${tipPercentage}%)`}</span>
-                  <span>A${tip.toFixed(2)}</span>
-                </div>
-              )}
-              <div className="flex justify-between text-xl font-bold text-gray-900 pt-2 border-t-2 border-gray-300">
-                  <span>Total (incl GST)</span>
-                <span className="text-orange-600">A${total.toFixed(2)}</span>
-              </div>
-            </div>
-
-            {/* Tip Buttons - No tip + percentages, larger for touch */}
-            <div className="grid grid-cols-5 gap-2">
-              <button
-                onClick={removeTip}
-                className={cn(
-                  "px-2 py-4 rounded-xl text-sm font-bold transition-all active:scale-95 min-h-[56px] flex items-center justify-center",
-                  tip === 0
-                    ? 'bg-gray-800 text-white shadow-lg'
-                    : 'bg-gray-100 text-gray-600 hover:bg-gray-200'
-                )}
-                title="Remove tip"
-              >
-                No tip
-              </button>
-              {[15, 18, 20, 25].map((percent) => (
-                <button
-                  key={percent}
-                  onClick={() => handleTip(percent)}
-                  className={cn(
-                    "px-2 py-4 rounded-xl text-base font-bold transition-all active:scale-95 min-h-[56px]",
-                    tipPercentage === percent
-                      ? 'bg-orange-600 text-white shadow-lg'
-                      : 'bg-gray-100 text-gray-700 hover:bg-gray-200'
-                  )}
-                >
-                  {percent}%
-                </button>
-              ))}
-            </div>
-
-            {/* Payment Button - Large and prominent for touch */}
-            <Button
-              className="w-full h-16 text-xl font-bold shadow-lg"
-              size="lg"
-              onClick={() => setShowPaymentModal(true)}
-              disabled={cart.length === 0}
-            >
-              <CreditCard className="w-7 h-7 mr-2" />
-              Pay A${total.toFixed(2)}
-            </Button>
-
-            {/* Print Receipt Button */}
-            {cart.length > 0 && (
-              <Button
-                variant="secondary"
-                className="w-full h-14 text-base font-semibold mt-3"
-                onClick={printReceipt}
-              >
-                <Printer className="w-5 h-5 mr-2" />
-                Print Receipt
-              </Button>
-            )}
-          </div>
         </div>
           </>
         )}
@@ -2049,7 +2241,7 @@ export function POSSystem() {
             <div className="p-6 border-b border-gray-200">
               <h2 className="text-2xl font-bold text-gray-900 mb-4">Orders</h2>
               <div className="flex items-center gap-4">
-                <Input
+                <POSInput
                   placeholder="Search orders..."
                   className="flex-1"
                   value={searchQuery}
@@ -2105,6 +2297,9 @@ export function POSSystem() {
                             {order.customerPhone && (
                               <p className="text-sm text-gray-500">{order.customerPhone}</p>
                             )}
+                            {order.specialRequests && (
+                              <p className="text-sm text-gray-600 mt-1 bg-amber-50 px-2 py-1 rounded">Seating: {order.specialRequests}</p>
+                            )}
                           </div>
                           <div className="text-right">
                             <p className="text-2xl font-bold text-orange-600">A${Number(order.total).toFixed(2)}</p>
@@ -2123,12 +2318,29 @@ export function POSSystem() {
                         </div>
                         <div className="border-t border-gray-200 pt-4">
                           <div className="space-y-2">
-                            {order.items.map((item, idx) => (
-                              <div key={idx} className="flex justify-between text-sm">
-                                <span className="text-gray-700">
-                                  {item.quantity}x {item.name}
-                                </span>
-                                <span className="text-gray-600">A${(item.price * item.quantity).toFixed(2)}</span>
+                            {order.items.map((item: { quantity: number; name: string; price: number; customizations?: { id: string; type?: string; options?: { name: string; price?: number }[] }[] }, idx: number) => (
+                              <div key={idx} className="text-sm">
+                                <div className="flex justify-between">
+                                  <span className="text-gray-700">
+                                    {item.quantity}x {item.name}
+                                  </span>
+                                  <span className="text-gray-600">A${(priceInclGst(item.price) * item.quantity).toFixed(2)}</span>
+                                </div>
+                                {item.customizations && item.customizations.length > 0 && (
+                                  <div className="text-xs text-gray-500 mt-0.5 ml-4 space-y-0.5">
+                                    {item.customizations.map((g) => {
+                                      const opts = (g.options || []).map((o) => o.name).filter(Boolean).join(', ')
+                                      if (!opts) return null
+                                      if ((g.type || '').toLowerCase() === 'remove') {
+                                        return <div key={g.id}>Remove: {opts}</div>
+                                      }
+                                      const pricePart = (g.options || []).some((o) => Number(o?.price) > 0)
+                                        ? ` (+$${(g.options || []).reduce((s, o) => s + Number(o?.price || 0), 0).toFixed(2)})`
+                                        : ''
+                                      return <div key={g.id}>Extras: {opts}{pricePart}</div>
+                                    })}
+                                  </div>
+                                )}
                               </div>
                             ))}
                           </div>
@@ -2168,12 +2380,26 @@ export function POSSystem() {
                         </div>
                         <div className="border-t border-gray-200 pt-4">
                           <div className="space-y-2">
-                            {(order.items ?? []).map((item: { quantity: number; name: string; finalPrice: number }, idx: number) => (
-                              <div key={idx} className="flex justify-between text-sm">
-                                <span className="text-gray-700">
-                                  {item.quantity}x {item.name}
-                                </span>
-                                <span className="text-gray-600">A${(item.finalPrice * item.quantity).toFixed(2)}</span>
+                            {(order.items ?? []).map((item: { quantity: number; name: string; finalPrice: number; customizations?: { groupName: string; optionNames: string[]; totalPrice: number }[] }, idx: number) => (
+                              <div key={idx} className="text-sm">
+                                <div className="flex justify-between">
+                                  <span className="text-gray-700">
+                                    {item.quantity}x {item.name}
+                                  </span>
+                                  <span className="text-gray-600">A${(item.finalPrice * item.quantity).toFixed(2)}</span>
+                                </div>
+                                {item.customizations && item.customizations.length > 0 && (
+                                  <div className="text-xs text-gray-500 mt-0.5 ml-4 space-y-0.5">
+                                    {item.customizations.map((c, i) => {
+                                      const opts = (c.optionNames || []).filter(Boolean).join(', ')
+                                      if (!opts) return null
+                                      const isRemove = (c.groupName || '').toLowerCase().includes('remove')
+                                      if (isRemove) return <div key={i}>Remove: {opts}</div>
+                                      const pricePart = (c.totalPrice ?? 0) > 0 ? ` (+$${c.totalPrice.toFixed(2)})` : ''
+                                      return <div key={i}>Add: {opts}{pricePart}</div>
+                                    })}
+                                  </div>
+                                )}
                               </div>
                             ))}
                           </div>
@@ -2187,176 +2413,414 @@ export function POSSystem() {
           </div>
         )}
 
-        {/* Transactions Section */}
-        {activeSection === 'transactions' && (
+        {/* More Section: main grid, or Transactions, or Items (with back) */}
+        {activeSection === 'more' && (
           <div className="w-full flex flex-col bg-white overflow-hidden">
-            <div className="p-6 border-b border-gray-200">
-              <h2 className="text-2xl font-bold text-gray-900 mb-4">Transactions</h2>
-              <div className="flex items-center gap-4">
-                <Input
-                  placeholder="Search transactions..."
-                  className="flex-1"
-                  value={searchQuery}
-                  onChange={(e) => setSearchQuery(e.target.value)}
-                />
-                <Badge variant="info">{transactions.length} transactions</Badge>
-              </div>
-            </div>
-            <div className="flex-1 overflow-y-auto p-6">
-              {transactions.length === 0 ? (
-                <div className="text-center py-12">
-                  <TrendingUp className="w-16 h-16 text-gray-300 mx-auto mb-4" />
-                  <p className="text-gray-500 font-medium">No transactions yet</p>
-                  <p className="text-sm text-gray-400 mt-2">Transactions will appear here after payment</p>
+            {moreSubSection === 'main' ? (
+              <>
+                <div className="p-6 border-b border-gray-200">
+                  <h2 className="text-2xl font-bold text-gray-900 mb-2">More</h2>
+                  <p className="text-sm text-gray-600">Transactions, items, and settings</p>
                 </div>
-              ) : (
-                <div className="space-y-4">
-                  {transactions.map((txn) => (
-                    <div key={txn.id} className="bg-white border-2 border-gray-200 rounded-xl p-6 shadow-sm">
-                      <div className="flex items-start justify-between mb-4">
-                        <div>
-                          <div className="flex items-center gap-3 mb-2">
-                            <h3 className="text-lg font-bold text-gray-900">Transaction #{txn.id.slice(-8)}</h3>
-                            <Badge variant={txn.paymentStatus === 'captured' ? 'success' : 'warning'}>
-                              {txn.paymentStatus}
-                            </Badge>
-                          </div>
-                          <p className="text-sm text-gray-600">Order #{txn.orderNumber}</p>
-                          <p className="text-sm text-gray-600">
-                            {new Date(txn.createdAt).toLocaleString('en-AU')}
-                          </p>
-                          <p className="text-sm text-gray-600">Payment Method: {txn.paymentMethod?.toUpperCase() || 'N/A'}</p>
-                          <p className="text-sm text-gray-600">Items: {txn.items}</p>
-                        </div>
-                        <div className="text-right">
-                          <p className="text-2xl font-bold text-green-600">A${txn.amount.toFixed(2)}</p>
-                          <p className="text-xs text-gray-500 mt-1">Paid</p>
-                        </div>
-                      </div>
-                    </div>
-                  ))}
+                <div className="flex-1 overflow-y-auto p-6">
+                  <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
+                    <button
+                      onClick={() => setMoreSubSection('transactions')}
+                      className="bg-white border-2 border-gray-200 rounded-xl p-6 text-left hover:border-orange-500 transition-all"
+                    >
+                      <TrendingUp className="w-8 h-8 text-orange-600 mb-3" />
+                      <h3 className="font-bold text-gray-900 mb-1">Transactions</h3>
+                      <p className="text-sm text-gray-600">View payment history and transactions</p>
+                      {transactions.length > 0 && (
+                        <p className="text-xs text-orange-600 mt-2">{transactions.length} transactions</p>
+                      )}
+                    </button>
+                    <button
+                      onClick={() => setMoreSubSection('items')}
+                      className="bg-white border-2 border-gray-200 rounded-xl p-6 text-left hover:border-orange-500 transition-all"
+                    >
+                      <ChefHat className="w-8 h-8 text-orange-600 mb-3" />
+                      <h3 className="font-bold text-gray-900 mb-1">Menu Items</h3>
+                      <p className="text-sm text-gray-600">Manage POS menu items</p>
+                    </button>
+                    <button
+                      onClick={() => setMoreSubSection('printTest')}
+                      className="bg-white border-2 border-gray-200 rounded-xl p-6 text-left hover:border-orange-500 transition-all"
+                    >
+                      <Printer className="w-8 h-8 text-orange-600 mb-3" />
+                      <h3 className="font-bold text-gray-900 mb-1">Print Test Receipt</h3>
+                      <p className="text-sm text-gray-600">Print a test receipt to check printer</p>
+                    </button>
+                    <button
+                      onClick={() => setMoreSubSection('reports')}
+                      className="bg-white border-2 border-gray-200 rounded-xl p-6 text-left hover:border-orange-500 transition-all"
+                    >
+                      <BarChart3 className="w-8 h-8 text-orange-600 mb-3" />
+                      <h3 className="font-bold text-gray-900 mb-1">View Reports</h3>
+                      <p className="text-sm text-gray-600">Sales reports and analytics</p>
+                    </button>
+                    <button
+                      onClick={() => setMoreSubSection('dailySummary')}
+                      className="bg-white border-2 border-gray-200 rounded-xl p-6 text-left hover:border-orange-500 transition-all"
+                    >
+                      <Receipt className="w-8 h-8 text-orange-600 mb-3" />
+                      <h3 className="font-bold text-gray-900 mb-1">Daily Summary</h3>
+                      <p className="text-sm text-gray-600">View today's sales summary</p>
+                    </button>
+                    <button
+                      onClick={() => setMoreSubSection('settings')}
+                      className="bg-white border-2 border-gray-200 rounded-xl p-6 text-left hover:border-orange-500 transition-all"
+                    >
+                      <Settings className="w-8 h-8 text-orange-600 mb-3" />
+                      <h3 className="font-bold text-gray-900 mb-1">System Settings</h3>
+                      <p className="text-sm text-gray-600">Language, currency, time</p>
+                    </button>
+                    <button
+                      onClick={() => { setMoreSubSection('support'); setSupportSent(false); setSupportMessage('') }}
+                      className="bg-white border-2 border-gray-200 rounded-xl p-6 text-left hover:border-orange-500 transition-all"
+                    >
+                      <Headphones className="w-8 h-8 text-orange-600 mb-3" />
+                      <h3 className="font-bold text-gray-900 mb-1">Support</h3>
+                      <p className="text-sm text-gray-600">Technical help & issues → System Control</p>
+                    </button>
+                  </div>
                 </div>
-              )}
-            </div>
-          </div>
-        )}
-
-        {/* Items Management Section */}
-        {activeSection === 'items' && (
-          <div className="w-full flex flex-col bg-white overflow-hidden">
-            <div className="p-6 border-b border-gray-200 flex items-center justify-between">
-              <div>
-                <h2 className="text-2xl font-bold text-gray-900 mb-2">Menu Items</h2>
-                <p className="text-sm text-gray-600">Manage all POS menu items</p>
-              </div>
-              <Button onClick={handleAddItem} variant="primary">
-                <Plus className="w-4 h-4 mr-2" />
-                Add Item
-              </Button>
-            </div>
-            <div className="flex-1 overflow-y-auto p-6">
-              <div className="space-y-4">
-                {categories.map((category) => (
-                  <div key={category.id} className="mb-8">
-                    <div className="flex items-center gap-3 mb-4">
-                      <div className={cn("p-3 rounded-lg", category.bgColor)}>
-                        <category.icon className="w-6 h-6 text-white" />
-                      </div>
-                      <h3 className="text-xl font-bold text-gray-900">{category.name}</h3>
-                      <Badge variant="info">{category.subItems.length} items</Badge>
+              </>
+            ) : moreSubSection === 'transactions' ? (
+              <>
+                <div className="p-4 border-b border-gray-200 flex items-center gap-4">
+                  <button
+                    onClick={() => setMoreSubSection('main')}
+                    className="p-2 hover:bg-gray-100 rounded-lg transition-colors"
+                  >
+                    <ArrowLeft className="w-5 h-5 text-gray-600" />
+                  </button>
+                  <div className="flex-1">
+                    <h2 className="text-xl font-bold text-gray-900">Transactions</h2>
+                    <div className="flex items-center gap-4 mt-2">
+                      <POSInput
+                        placeholder="Search transactions..."
+                        className="flex-1 max-w-xs"
+                        value={searchQuery}
+                        onChange={(e) => setSearchQuery(e.target.value)}
+                      />
+                      <Badge variant="info">{transactions.length} transactions</Badge>
                     </div>
-                    <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-4">
-                      {category.subItems.map((item) => (
-                        <div key={item.id} className="bg-gray-50 border-2 border-gray-200 rounded-xl p-4">
-                          <div className="flex items-start justify-between mb-3">
-                            <div className="flex-1">
-                              <h4 className="font-bold text-gray-900 mb-1">{item.name}</h4>
-                              <p className="text-xs text-gray-600 mb-2 line-clamp-2">{item.description}</p>
-                              <p className="text-lg font-bold text-orange-600">A${(item.basePrice * (1 + GST_RATE)).toFixed(2)}</p>
-                              <div className="flex items-center gap-2 mt-2">
-                                {item.popular && <Badge variant="warning" className="text-xs">Popular</Badge>}
-                                {item.isAvailable ? (
-                                  <Badge variant="success" className="text-xs">Available</Badge>
-                                ) : (
-                                  <Badge variant="danger" className="text-xs">Unavailable</Badge>
-                                )}
+                  </div>
+                </div>
+                <div className="flex-1 overflow-y-auto p-6">
+                  {transactions.length === 0 ? (
+                    <div className="text-center py-12">
+                      <TrendingUp className="w-16 h-16 text-gray-300 mx-auto mb-4" />
+                      <p className="text-gray-500 font-medium">No transactions yet</p>
+                      <p className="text-sm text-gray-400 mt-2">Transactions will appear here after payment</p>
+                    </div>
+                  ) : (
+                    <div className="space-y-4">
+                      {transactions.map((txn) => (
+                        <div key={txn.id} className="bg-white border-2 border-gray-200 rounded-xl p-6 shadow-sm">
+                          <div className="flex items-start justify-between mb-4">
+                            <div>
+                              <div className="flex items-center gap-3 mb-2">
+                                <h3 className="text-lg font-bold text-gray-900">Transaction #{txn.id.slice(-8)}</h3>
+                                <Badge variant={txn.paymentStatus === 'captured' ? 'success' : 'warning'}>
+                                  {txn.paymentStatus}
+                                </Badge>
                               </div>
+                              <p className="text-sm text-gray-600">Order #{txn.orderNumber}</p>
+                              <p className="text-sm text-gray-600">
+                                {new Date(txn.createdAt).toLocaleString('en-AU')}
+                              </p>
+                              <p className="text-sm text-gray-600">Payment Method: {txn.paymentMethod?.toUpperCase() || 'N/A'}</p>
+                              <p className="text-sm text-gray-600">Items: {txn.items}</p>
                             </div>
-                            {item.image && (
-                              <img src={item.image} alt={item.name} className="w-16 h-16 object-cover rounded-lg ml-2" />
-                            )}
-                          </div>
-                          <div className="flex gap-2 mt-4">
-                            <Button
-                              variant="secondary"
-                              size="sm"
-                              onClick={() => handleEditItem(item)}
-                              className="flex-1"
-                            >
-                              <Pencil className="w-4 h-4 mr-1" />
-                              Edit
-                            </Button>
-                            <Button
-                              variant="danger"
-                              size="sm"
-                              onClick={() => handleDeleteItem(item.id)}
-                              className="flex-1"
-                            >
-                              <X className="w-4 h-4 mr-1" />
-                              Delete
-                            </Button>
+                            <div className="text-right">
+                              <p className="text-2xl font-bold text-green-600">A${txn.amount.toFixed(2)}</p>
+                              <p className="text-xs text-gray-500 mt-1">Paid</p>
+                            </div>
                           </div>
                         </div>
                       ))}
                     </div>
+                  )}
+                </div>
+              </>
+            ) : moreSubSection === 'reports' ? (
+              <>
+                <div className="p-4 border-b border-gray-200 flex items-center gap-4">
+                  <button onClick={() => setMoreSubSection('main')} className="p-2 hover:bg-gray-100 rounded-lg transition-colors">
+                    <ArrowLeft className="w-5 h-5 text-gray-600" />
+                  </button>
+                  <div>
+                    <h2 className="text-xl font-bold text-gray-900">View Reports</h2>
+                    <p className="text-sm text-gray-600">Sales and transaction analytics</p>
                   </div>
-                ))}
-              </div>
-            </div>
-          </div>
-        )}
-
-        {/* More/Settings Section */}
-        {activeSection === 'more' && (
-          <div className="w-full flex flex-col bg-white overflow-hidden">
-            <div className="p-6 border-b border-gray-200">
-              <h2 className="text-2xl font-bold text-gray-900 mb-2">More Options</h2>
-              <p className="text-sm text-gray-600">POS system settings and special functions</p>
-            </div>
-            <div className="flex-1 overflow-y-auto p-6">
-              <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
-                <button className="bg-white border-2 border-gray-200 rounded-xl p-6 text-left hover:border-orange-500 transition-all">
-                  <Printer className="w-8 h-8 text-orange-600 mb-3" />
-                  <h3 className="font-bold text-gray-900 mb-1">Print Test Receipt</h3>
-                  <p className="text-sm text-gray-600">Print a test receipt to check printer</p>
-                </button>
-                <button className="bg-white border-2 border-gray-200 rounded-xl p-6 text-left hover:border-orange-500 transition-all">
-                  <Receipt className="w-8 h-8 text-orange-600 mb-3" />
-                  <h3 className="font-bold text-gray-900 mb-1">View Reports</h3>
-                  <p className="text-sm text-gray-600">Sales reports and analytics</p>
-                </button>
-                <button className="bg-white border-2 border-gray-200 rounded-xl p-6 text-left hover:border-orange-500 transition-all">
-                  <TrendingUp className="w-8 h-8 text-orange-600 mb-3" />
-                  <h3 className="font-bold text-gray-900 mb-1">Daily Summary</h3>
-                  <p className="text-sm text-gray-600">View today's sales summary</p>
-                </button>
-                <button className="bg-white border-2 border-gray-200 rounded-xl p-6 text-left hover:border-orange-500 transition-all">
-                  <Clock className="w-8 h-8 text-orange-600 mb-3" />
-                  <h3 className="font-bold text-gray-900 mb-1">Shift Management</h3>
-                  <p className="text-sm text-gray-600">Start/end shift, view shift reports</p>
-                </button>
-                <button className="bg-white border-2 border-gray-200 rounded-xl p-6 text-left hover:border-orange-500 transition-all">
-                  <User className="w-8 h-8 text-orange-600 mb-3" />
-                  <h3 className="font-bold text-gray-900 mb-1">Staff Management</h3>
-                  <p className="text-sm text-gray-600">Manage staff and permissions</p>
-                </button>
-                <button className="bg-white border-2 border-gray-200 rounded-xl p-6 text-left hover:border-orange-500 transition-all">
-                  <Zap className="w-8 h-8 text-orange-600 mb-3" />
-                  <h3 className="font-bold text-gray-900 mb-1">System Settings</h3>
-                  <p className="text-sm text-gray-600">Configure POS settings</p>
-                </button>
-              </div>
-            </div>
+                </div>
+                <div className="flex-1 overflow-y-auto p-6">
+                  <div className="grid grid-cols-1 md:grid-cols-2 gap-4 mb-6">
+                    <div className="bg-white border-2 border-gray-200 rounded-xl p-6">
+                      <h3 className="font-bold text-gray-900 mb-2">Total Transactions</h3>
+                      <p className="text-3xl font-bold text-orange-600">{transactions.length}</p>
+                      <p className="text-sm text-gray-500 mt-1">All time (this session)</p>
+                    </div>
+                    <div className="bg-white border-2 border-gray-200 rounded-xl p-6">
+                      <h3 className="font-bold text-gray-900 mb-2">Total Revenue</h3>
+                      <p className="text-3xl font-bold text-green-600">A${transactions.reduce((s, t) => s + t.amount, 0).toFixed(2)}</p>
+                      <p className="text-sm text-gray-500 mt-1">From completed payments</p>
+                    </div>
+                  </div>
+                  <p className="text-sm text-gray-500">Detailed reports and exports can be viewed in Restaurant Dashboard and System Control.</p>
+                </div>
+              </>
+            ) : moreSubSection === 'printTest' ? (
+              <>
+                <div className="p-4 border-b border-gray-200 flex items-center gap-4">
+                  <button onClick={() => setMoreSubSection('main')} className="p-2 hover:bg-gray-100 rounded-lg transition-colors">
+                    <ArrowLeft className="w-5 h-5 text-gray-600" />
+                  </button>
+                  <div>
+                    <h2 className="text-xl font-bold text-gray-900">Print Test Receipt</h2>
+                    <p className="text-sm text-gray-600">Check printer with a sample receipt</p>
+                  </div>
+                </div>
+                <div className="flex-1 overflow-y-auto p-6">
+                  <p className="text-sm text-gray-600 mb-4">Print a test receipt to verify your printer is working. Uses sample data.</p>
+                  <Button onClick={() => printReceipt()} variant="primary" size="lg">
+                    <Printer className="w-5 h-5 mr-2" />
+                    Print Test Receipt
+                  </Button>
+                </div>
+              </>
+            ) : moreSubSection === 'dailySummary' ? (
+              <>
+                <div className="p-4 border-b border-gray-200 flex items-center gap-4">
+                  <button onClick={() => setMoreSubSection('main')} className="p-2 hover:bg-gray-100 rounded-lg transition-colors">
+                    <ArrowLeft className="w-5 h-5 text-gray-600" />
+                  </button>
+                  <div>
+                    <h2 className="text-xl font-bold text-gray-900">Daily Summary</h2>
+                    <p className="text-sm text-gray-600">Today&apos;s sales overview</p>
+                  </div>
+                </div>
+                <div className="flex-1 overflow-y-auto p-6">
+                  <div className="text-sm text-gray-500 mb-2">{new Date().toLocaleDateString('en-AU', { weekday: 'long', dateStyle: 'full' })}</div>
+                  <div className="grid grid-cols-1 md:grid-cols-2 gap-4 mb-6">
+                    <div className="bg-white border-2 border-gray-200 rounded-xl p-6">
+                      <h3 className="font-bold text-gray-900 mb-2">Transactions Today</h3>
+                      <p className="text-3xl font-bold text-orange-600">
+                        {transactions.filter((t) => new Date(t.createdAt).toDateString() === new Date().toDateString()).length}
+                      </p>
+                    </div>
+                    <div className="bg-white border-2 border-gray-200 rounded-xl p-6">
+                      <h3 className="font-bold text-gray-900 mb-2">Revenue Today</h3>
+                      <p className="text-3xl font-bold text-green-600">
+                        A${transactions.filter((t) => new Date(t.createdAt).toDateString() === new Date().toDateString()).reduce((s, t) => s + t.amount, 0).toFixed(2)}
+                      </p>
+                    </div>
+                  </div>
+                </div>
+              </>
+            ) : moreSubSection === 'settings' ? (
+              <>
+                <div className="p-4 border-b border-gray-200 flex items-center gap-4">
+                  <button onClick={() => setMoreSubSection('main')} className="p-2 hover:bg-gray-100 rounded-lg transition-colors">
+                    <ArrowLeft className="w-5 h-5 text-gray-600" />
+                  </button>
+                  <div>
+                    <h2 className="text-xl font-bold text-gray-900">System Settings</h2>
+                    <p className="text-sm text-gray-600">Language, currency, time zone</p>
+                  </div>
+                </div>
+                <div className="flex-1 overflow-y-auto p-6 space-y-6">
+                  <div>
+                    <label className="block text-sm font-medium text-gray-700 mb-2">Language</label>
+                    <select
+                      value={posLanguage}
+                      onChange={(e) => setPosLanguage(e.target.value)}
+                      className="w-full rounded-md border border-gray-300 px-3 py-2 text-sm"
+                    >
+                      <option value="en">English</option>
+                      <option value="es">Spanish</option>
+                      <option value="fr">French</option>
+                      <option value="de">German</option>
+                      <option value="zh">Chinese</option>
+                      <option value="ar">Arabic</option>
+                    </select>
+                    <p className="text-xs text-gray-500 mt-1">Display language (translator). Full translation can be added per language.</p>
+                  </div>
+                  <div>
+                    <label className="block text-sm font-medium text-gray-700 mb-2">Currency</label>
+                    <select
+                      value={posCurrency}
+                      onChange={(e) => setPosCurrency(e.target.value)}
+                      className="w-full rounded-md border border-gray-300 px-3 py-2 text-sm"
+                    >
+                      <option value="AUD">AUD (A$)</option>
+                      <option value="USD">USD ($)</option>
+                      <option value="EUR">EUR (€)</option>
+                      <option value="GBP">GBP (£)</option>
+                      <option value="INR">INR (₹)</option>
+                    </select>
+                  </div>
+                  <div>
+                    <label className="block text-sm font-medium text-gray-700 mb-2">Time zone</label>
+                    <select
+                      value={posTimezone}
+                      onChange={(e) => setPosTimezone(e.target.value)}
+                      className="w-full rounded-md border border-gray-300 px-3 py-2 text-sm"
+                    >
+                      <option value="Australia/Sydney">Australia/Sydney</option>
+                      <option value="Australia/Melbourne">Australia/Melbourne</option>
+                      <option value="America/New_York">America/New_York</option>
+                      <option value="America/Los_Angeles">America/Los_Angeles</option>
+                      <option value="Europe/London">Europe/London</option>
+                      <option value="Asia/Kolkata">Asia/Kolkata</option>
+                      <option value="UTC">UTC</option>
+                    </select>
+                    <p className="text-xs text-gray-500 mt-1">Current time: {new Date().toLocaleString('en-AU', { timeZone: posTimezone })}</p>
+                  </div>
+                </div>
+              </>
+            ) : moreSubSection === 'support' ? (
+              <>
+                <div className="p-4 border-b border-gray-200 flex items-center gap-4">
+                  <button onClick={() => setMoreSubSection('main')} className="p-2 hover:bg-gray-100 rounded-lg transition-colors">
+                    <ArrowLeft className="w-5 h-5 text-gray-600" />
+                  </button>
+                  <div>
+                    <h2 className="text-xl font-bold text-gray-900">Support</h2>
+                    <p className="text-sm text-gray-600">Send issue or technical help → appears in System Control</p>
+                  </div>
+                </div>
+                <div className="flex-1 overflow-y-auto p-6">
+                  {supportSent ? (
+                    <div className="bg-green-50 border border-green-200 rounded-xl p-6 text-center">
+                      <Check className="w-12 h-12 text-green-600 mx-auto mb-2" />
+                      <p className="font-semibold text-green-800">Message sent</p>
+                      <p className="text-sm text-green-700 mt-1">Your message is visible in System Control → Support (Help desk).</p>
+                      <Button variant="ghost" className="mt-4" onClick={() => { setSupportSent(false); setSupportMessage('') }}>Send another</Button>
+                    </div>
+                  ) : (
+                    <div className="space-y-4 max-w-lg">
+                      <div>
+                        <label className="block text-sm font-medium text-gray-700 mb-2">Type</label>
+                        <select
+                          value={supportType}
+                          onChange={(e) => setSupportType(e.target.value as 'issue' | 'technical')}
+                          className="w-full rounded-md border border-gray-300 px-3 py-2 text-sm"
+                        >
+                          <option value="issue">Issue / Bug</option>
+                          <option value="technical">Technical help</option>
+                        </select>
+                      </div>
+                      <div>
+                        <label className="block text-sm font-medium text-gray-700 mb-2">Message</label>
+                        <textarea
+                          value={supportMessage}
+                          onChange={(e) => setSupportMessage(e.target.value)}
+                          placeholder="Describe your issue or request technical help..."
+                          rows={4}
+                          className="w-full rounded-md border border-gray-300 px-3 py-2 text-sm"
+                        />
+                      </div>
+                      <Button
+                        onClick={async () => {
+                          if (!supportMessage.trim()) return
+                          setSupportSending(true)
+                          try {
+                            const res = await fetch('/api/support', {
+                              method: 'POST',
+                              headers: { 'Content-Type': 'application/json' },
+                              body: JSON.stringify({ message: supportMessage.trim(), type: supportType, source: 'pos' }),
+                            })
+                            if (res.ok) setSupportSent(true)
+                          } finally {
+                            setSupportSending(false)
+                          }
+                        }}
+                        disabled={!supportMessage.trim() || supportSending}
+                        variant="primary"
+                      >
+                        {supportSending ? 'Sending...' : 'Send to System Control (Help desk)'}
+                      </Button>
+                    </div>
+                  )}
+                </div>
+              </>
+            ) : (
+              /* moreSubSection === 'items' */
+              <>
+                <div className="p-4 border-b border-gray-200 flex items-center justify-between">
+                  <div className="flex items-center gap-4">
+                    <button
+                      onClick={() => setMoreSubSection('main')}
+                      className="p-2 hover:bg-gray-100 rounded-lg transition-colors"
+                    >
+                      <ArrowLeft className="w-5 h-5 text-gray-600" />
+                    </button>
+                    <div>
+                      <h2 className="text-xl font-bold text-gray-900">Menu Items</h2>
+                      <p className="text-sm text-gray-600">Manage all POS menu items</p>
+                    </div>
+                  </div>
+                  <Button onClick={handleAddItem} variant="primary">
+                    <Plus className="w-4 h-4 mr-2" />
+                    Add Item
+                  </Button>
+                </div>
+                <div className="flex-1 overflow-y-auto p-6">
+                  <div className="space-y-4">
+                    {categories.map((category) => (
+                      <div key={category.id} className="mb-8">
+                        <div className="flex items-center gap-3 mb-4">
+                          <div className={cn("p-3 rounded-lg", category.bgColor)}>
+                            <category.icon className="w-6 h-6 text-white" />
+                          </div>
+                          <h3 className="text-xl font-bold text-gray-900">{category.name}</h3>
+                          <Badge variant="info">{category.subItems.length} items</Badge>
+                        </div>
+                        <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-4">
+                          {category.subItems.map((item) => (
+                            <div key={item.id} className="bg-gray-50 border-2 border-gray-200 rounded-xl p-4">
+                              <div className="flex items-start justify-between mb-3">
+                                <div className="flex-1">
+                                  <h4 className="font-bold text-gray-900 mb-1">{item.name}</h4>
+                                  <p className="text-xs text-gray-600 mb-2 line-clamp-2">{item.description}</p>
+                                  <p className="text-lg font-bold text-orange-600">A${(item.basePrice * (1 + GST_RATE)).toFixed(2)}</p>
+                                  <div className="flex items-center gap-2 mt-2">
+                                    {item.popular && <Badge variant="warning" className="text-xs">Popular</Badge>}
+                                    {item.isAvailable ? (
+                                      <Badge variant="success" className="text-xs">Available</Badge>
+                                    ) : (
+                                      <Badge variant="danger" className="text-xs">Unavailable</Badge>
+                                    )}
+                                  </div>
+                                </div>
+                                {item.image && (
+                                  <img src={item.image} alt={item.name} className="w-16 h-16 object-cover rounded-lg ml-2" />
+                                )}
+                              </div>
+                              <div className="flex gap-2 mt-4">
+                                <Button
+                                  variant="secondary"
+                                  size="sm"
+                                  onClick={() => handleEditItem(item)}
+                                  className="flex-1"
+                                >
+                                  <Pencil className="w-4 h-4 mr-1" />
+                                  Edit
+                                </Button>
+                                <span className="text-xs text-gray-500 self-center">Delete items in Restaurant Dashboard</span>
+                              </div>
+                            </div>
+                          ))}
+                        </div>
+                      </div>
+                    ))}
+                  </div>
+                </div>
+              </>
+            )}
           </div>
         )}
       </div>
@@ -2452,15 +2916,15 @@ export function POSSystem() {
 
                     <div className="bg-gray-50 rounded-lg p-4 mb-4 border-t-2 border-gray-200">
                       <div className="flex justify-between text-sm mb-2">
-                        <span className="text-gray-600">Subtotal (ex GST)</span>
-                        <span className="text-gray-900">A${itemPriceExGst.toFixed(2)}</span>
+                        <span className="text-gray-600">Subtotal (incl. GST)</span>
+                        <span className="text-gray-900">A${itemFinalPrice.toFixed(2)}</span>
                       </div>
                       <div className="flex justify-between text-sm mb-2">
-                        <span className="text-gray-600">GST (10%)</span>
+                        <span className="text-gray-600">GST included (10%)</span>
                         <span className="text-gray-900">A${itemGstAmount.toFixed(2)}</span>
                       </div>
                       <div className="flex justify-between text-lg font-bold pt-2 border-t border-gray-300">
-                        <span>Total (incl GST)</span>
+                        <span>TOTAL</span>
                         <span className="text-orange-600">A${itemFinalPrice.toFixed(2)}</span>
                       </div>
                     </div>
@@ -2483,37 +2947,26 @@ export function POSSystem() {
       </Dialog>
 
       {/* Payment Modal */}
-      <Dialog open={showPaymentModal} onOpenChange={setShowPaymentModal}>
+      <Dialog open={showPaymentModal} onOpenChange={(open) => { setShowPaymentModal(open); if (!open) setCashTendered('') }}>
         <DialogContent
           title="Select Payment Method"
-          onClose={() => setShowPaymentModal(false)}
+          onClose={() => { setShowPaymentModal(false); setCashTendered('') }}
         >
           <div className="space-y-4">
-            {/* Order type: Dine In / Pickup / Delivery */}
+            {/* Order type: Pickup / Dine In / Delivery (no table number) */}
             <div>
               <label className="block text-sm font-medium text-gray-700 mb-2">Order type</label>
               <Tabs value={orderType} onValueChange={(v) => setOrderType(v as OrderType)}>
                 <TabsList className="w-full grid grid-cols-3 h-12">
-                  <TabsTrigger value="dine-in" className="text-sm font-semibold">Dine In</TabsTrigger>
                   <TabsTrigger value="pickup" className="text-sm font-semibold">Pickup</TabsTrigger>
+                  <TabsTrigger value="dine-in" className="text-sm font-semibold">Dine In</TabsTrigger>
                   <TabsTrigger value="delivery" className="text-sm font-semibold">Delivery</TabsTrigger>
                 </TabsList>
               </Tabs>
-              <div className="mt-3 space-y-2">
-                {orderType === 'dine-in' && (
-                  <div className="flex items-center gap-2 bg-gray-50 rounded-lg p-2">
-                    <Hash className="w-4 h-4 text-gray-400" />
-                    <Input
-                      value={tableNumber}
-                      onChange={(e) => setTableNumber(e.target.value)}
-                      placeholder="Table #"
-                      className="border-0 bg-transparent p-0 h-8 text-sm"
-                    />
-                  </div>
-                )}
+              <div className="mt-3">
                 <div className="flex items-center gap-2 bg-gray-50 rounded-lg p-2">
                   <User className="w-4 h-4 text-gray-400" />
-                  <Input
+                  <POSInput
                     value={customerName}
                     onChange={(e) => setCustomerName(e.target.value)}
                     placeholder="Customer name"
@@ -2523,33 +2976,74 @@ export function POSSystem() {
               </div>
             </div>
 
-            {/* Card or Cash */}
+            {/* Discount & Notes - after order type */}
+            <div className="space-y-3">
+              <div>
+                <label className="block text-sm font-medium text-gray-700 mb-2">Discount</label>
+                <Button
+                  type="button"
+                  variant="secondary"
+                  size="sm"
+                  onClick={() => setShowDiscountModal(true)}
+                  className="w-full justify-center"
+                >
+                  <Percent className="w-4 h-4 mr-2" />
+                  {discount ? `Discount applied: -A$${discountAmount.toFixed(2)}` : 'Apply discount'}
+                </Button>
+              </div>
+              <div>
+                <label className="block text-sm font-medium text-gray-700 mb-1">Order notes</label>
+                <POSInput
+                  value={orderNotes}
+                  onChange={(e) => setOrderNotes(e.target.value)}
+                  placeholder="e.g. No onions, extra napkins"
+                  className="text-sm"
+                />
+              </div>
+            </div>
+
+            {/* Card, Cash, or Mix Pay */}
             <div>
               <label className="block text-sm font-medium text-gray-700 mb-2">Payment method</label>
-              <div className="grid grid-cols-2 gap-4">
+              <div className="grid grid-cols-3 gap-3">
                 <button
-                  onClick={() => setPaymentMethod('card')}
+                  type="button"
+                  onClick={() => { setPaymentMethod('card'); setCashTendered(''); setMixCardAmount(''); setMixCashAmount('') }}
                   className={cn(
-                    "p-6 rounded-xl border-2 transition-all",
+                    "p-4 rounded-xl border-2 transition-all",
                     paymentMethod === 'card'
                       ? 'border-orange-500 bg-orange-50 scale-105'
                       : 'border-gray-200 hover:border-gray-300'
                   )}
                 >
-                  <CreditCard className="w-10 h-10 mx-auto mb-2 text-gray-600" />
-                  <p className="font-bold text-gray-900">Card</p>
+                  <CreditCard className="w-8 h-8 mx-auto mb-1 text-gray-600" />
+                  <p className="font-bold text-gray-900 text-sm">Card</p>
                 </button>
                 <button
-                  onClick={() => setPaymentMethod('cash')}
+                  type="button"
+                  onClick={() => { setPaymentMethod('cash'); setMixCardAmount(''); setMixCashAmount('') }}
                   className={cn(
-                    "p-6 rounded-xl border-2 transition-all",
+                    "p-4 rounded-xl border-2 transition-all",
                     paymentMethod === 'cash'
                       ? 'border-orange-500 bg-orange-50 scale-105'
                       : 'border-gray-200 hover:border-gray-300'
                   )}
                 >
-                  <DollarSign className="w-10 h-10 mx-auto mb-2 text-gray-600" />
-                  <p className="font-bold text-gray-900">Cash</p>
+                  <DollarSign className="w-8 h-8 mx-auto mb-1 text-gray-600" />
+                  <p className="font-bold text-gray-900 text-sm">Cash</p>
+                </button>
+                <button
+                  type="button"
+                  onClick={() => { setPaymentMethod('mix'); setCashTendered(''); setMixCardAmount(''); setMixCashAmount('') }}
+                  className={cn(
+                    "p-4 rounded-xl border-2 transition-all",
+                    paymentMethod === 'mix'
+                      ? 'border-orange-500 bg-orange-50 scale-105'
+                      : 'border-gray-200 hover:border-gray-300'
+                  )}
+                >
+                  <Wallet className="w-8 h-8 mx-auto mb-1 text-gray-600" />
+                  <p className="font-bold text-gray-900 text-sm">Mix Pay</p>
                 </button>
               </div>
             </div>
@@ -2557,11 +3051,11 @@ export function POSSystem() {
             <div className="bg-gray-50 rounded-lg p-4">
               <div className="space-y-2">
                 <div className="flex justify-between text-sm text-gray-600">
-                  <span>Subtotal (ex GST)</span>
-                  <span>A${subtotalExGst.toFixed(2)}</span>
+                  <span>Subtotal (incl. GST)</span>
+                  <span>A${subtotalInclGst.toFixed(2)}</span>
                 </div>
                 <div className="flex justify-between text-sm text-gray-600">
-                  <span>GST (10%)</span>
+                  <span>GST included (10%)</span>
                   <span>A${totalGst.toFixed(2)}</span>
                 </div>
                 {discount && (
@@ -2570,29 +3064,186 @@ export function POSSystem() {
                     <span>-A${discountAmount.toFixed(2)}</span>
                   </div>
                 )}
-                {tip > 0 && (
+                {surchargeApplied && (
                   <div className="flex justify-between text-sm text-gray-600">
-                    <span>Tip</span>
-                    <span>A${tip.toFixed(2)}</span>
+                    <span>{surchargeApplied.label} ({surchargeApplied.percent}%)</span>
+                    <span>A${surchargeAmount.toFixed(2)}</span>
                   </div>
                 )}
                 <div className="flex justify-between text-xl font-bold text-gray-900 pt-2 border-t-2 border-gray-300">
-                  <span>Total (incl GST)</span>
+                  <span>TOTAL</span>
                   <span className="text-orange-600">A${total.toFixed(2)}</span>
                 </div>
               </div>
             </div>
+
+            {/* Cash: amount received and change */}
+            {paymentMethod === 'cash' && (
+              <div className="bg-gray-50 border border-gray-200 rounded-lg p-4 space-y-3">
+                <label className="block text-sm font-medium text-gray-800">Cash received (A$)</label>
+                <POSInput
+                  type="number"
+                  keyboardType="number"
+                  step="0.01"
+                  min="0"
+                  placeholder="e.g. 100"
+                  value={cashTendered}
+                  onChange={(e) => setCashTendered(e.target.value)}
+                  className="text-lg font-semibold tabular-nums"
+                />
+                <div className="flex flex-wrap gap-2">
+                  <button
+                    type="button"
+                    onClick={() => setCashTendered(total.toFixed(2))}
+                    className="px-3 py-1.5 rounded-lg bg-white border border-amber-300 text-sm font-medium hover:bg-amber-100"
+                  >
+                    Exact (A${total.toFixed(2)})
+                  </button>
+                  {[20, 50, 100].map((n) => (
+                    <button
+                      key={n}
+                      type="button"
+                      onClick={() => setCashTendered(String(n))}
+                      className="px-3 py-1.5 rounded-lg bg-white border border-amber-300 text-sm font-medium hover:bg-amber-100"
+                    >
+                      A${n}
+                    </button>
+                  ))}
+                </div>
+                {(() => {
+                  const received = parseFloat(cashTendered) || 0
+                  const change = Math.max(0, received - total)
+                  const short = total - received
+                  if (received <= 0) {
+                    return <p className="text-sm text-gray-500">Enter amount received to see change.</p>
+                  }
+                  if (received < total) {
+                    return (
+                      <p className="text-sm font-semibold text-amber-800">
+                        Amount due: A${short.toFixed(2)}
+                      </p>
+                    )
+                  }
+                  return (
+                    <p className="text-lg font-bold text-green-700">
+                      Change to give: A${change.toFixed(2)}
+                    </p>
+                  )
+                })()}
+              </div>
+            )}
+
+            {/* Mix Pay: card amount + cash amount = total */}
+            {paymentMethod === 'mix' && (
+              <div className="bg-gray-50 border border-gray-200 rounded-lg p-4 space-y-4">
+                <p className="text-sm text-gray-700">Split payment: card (gateway) + cash. Total: <strong>A${total.toFixed(2)}</strong></p>
+                <div className="grid grid-cols-2 gap-4">
+                  <div>
+                    <label className="block text-sm font-medium text-gray-800 mb-1">Card (A$)</label>
+                    <POSInput
+                      type="number"
+                      keyboardType="number"
+                      step="0.01"
+                      min="0"
+                      placeholder="e.g. 40"
+                      value={mixCardAmount}
+                      onChange={(e) => {
+                        setMixCardAmount(e.target.value)
+                        const card = parseFloat(e.target.value) || 0
+                        if (card <= total && card >= 0) setMixCashAmount((total - card).toFixed(2))
+                      }}
+                      className="text-lg font-semibold tabular-nums"
+                    />
+                  </div>
+                  <div>
+                    <label className="block text-sm font-medium text-gray-800 mb-1">Cash (A$)</label>
+                    <POSInput
+                      type="number"
+                      keyboardType="number"
+                      step="0.01"
+                      min="0"
+                      placeholder="e.g. 60"
+                      value={mixCashAmount}
+                      onChange={(e) => {
+                        setMixCashAmount(e.target.value)
+                        const cash = parseFloat(e.target.value) || 0
+                        if (cash <= total && cash >= 0) setMixCardAmount((total - cash).toFixed(2))
+                      }}
+                      className="text-lg font-semibold tabular-nums"
+                    />
+                  </div>
+                </div>
+                <div className="flex gap-2 flex-wrap">
+                  <button
+                    type="button"
+                    onClick={() => { setMixCardAmount(total.toFixed(2)); setMixCashAmount('0.00') }}
+                    className="px-3 py-1.5 rounded-lg bg-white border border-gray-300 text-sm font-medium hover:bg-gray-100"
+                  >
+                    All card
+                  </button>
+                  <button
+                    type="button"
+                    onClick={() => { setMixCashAmount(total.toFixed(2)); setMixCardAmount('0.00') }}
+                    className="px-3 py-1.5 rounded-lg bg-white border border-gray-300 text-sm font-medium hover:bg-gray-100"
+                  >
+                    All cash
+                  </button>
+                  <button
+                    type="button"
+                    onClick={() => { setMixCardAmount((total / 2).toFixed(2)); setMixCashAmount((total / 2).toFixed(2)) }}
+                    className="px-3 py-1.5 rounded-lg bg-white border border-gray-300 text-sm font-medium hover:bg-gray-100"
+                  >
+                    50/50
+                  </button>
+                </div>
+                {(() => {
+                  const card = parseFloat(mixCardAmount) || 0
+                  const cash = parseFloat(mixCashAmount) || 0
+                  const sum = card + cash
+                  const diff = Math.abs(sum - total)
+                  const isValid = diff < 0.01 && card >= 0 && cash >= 0
+                  if (sum <= 0) return <p className="text-sm text-gray-500">Enter card and/or cash amounts.</p>
+                  if (!isValid) return <p className="text-sm font-semibold text-amber-800">Card + Cash must equal total (A${total.toFixed(2)}). Current: A${sum.toFixed(2)}</p>
+                  return <p className="text-sm font-semibold text-green-700">✓ Split valid: A${card.toFixed(2)} card + A${cash.toFixed(2)} cash = A${total.toFixed(2)}</p>
+                })()}
+                <div>
+                  <label className="block text-sm font-medium text-gray-700 mb-1">Cash received for cash portion (A$) — optional, for change</label>
+                  <POSInput
+                    type="number"
+                    keyboardType="number"
+                    step="0.01"
+                    min="0"
+                    placeholder="e.g. 70 if change needed"
+                    value={cashTendered}
+                    onChange={(e) => setCashTendered(e.target.value)}
+                    className="text-base tabular-nums"
+                  />
+                  {(() => {
+                    const cashPortion = parseFloat(mixCashAmount) || 0
+                    const received = parseFloat(cashTendered) || 0
+                    const change = Math.max(0, received - cashPortion)
+                    if (received <= 0 || cashPortion <= 0) return null
+                    if (received < cashPortion) return <p className="text-sm text-amber-700 mt-1">Cash portion due: A${(cashPortion - received).toFixed(2)}</p>
+                    return <p className="text-sm font-semibold text-green-700 mt-1">Change to give: A${change.toFixed(2)}</p>
+                  })()}
+                </div>
+              </div>
+            )}
 
             <Button
               onClick={handlePayment}
               variant="primary"
               size="lg"
               className="w-full h-14 text-lg font-bold"
-              disabled={isProcessing}
+              disabled={isProcessing || (paymentMethod === 'mix' && (() => {
+                const card = parseFloat(mixCardAmount) || 0
+                const cash = parseFloat(mixCashAmount) || 0
+                return Math.abs((card + cash) - total) >= 0.01 || card < 0 || cash < 0
+              })())}
               isLoading={isProcessing}
             >
-              {isProcessing ? 'Processing...' : `Process ${paymentMethod === 'card' ? 'Card' : 'Cash'} Payment`}
-              </Button>
+              {isProcessing ? 'Processing...' : paymentMethod === 'mix' ? 'Process Mix Payment' : `Process ${paymentMethod === 'card' ? 'Card' : 'Cash'} Payment`}
+            </Button>
           </div>
         </DialogContent>
       </Dialog>
@@ -2628,18 +3279,21 @@ export function POSSystem() {
           title={editingItem ? 'Edit Item' : 'Add Item'}
           description={editingItem ? 'Update menu item details' : 'Add a new item to the POS menu'}
           onClose={closeItemModal}
-          className="max-w-md"
+          className="max-w-md max-h-[90vh] overflow-y-auto"
         >
           <form
             onSubmit={(e) => {
               e.preventDefault()
+              if (!editingItem && itemFormData.categoryId === '__new__' && !(itemFormData.newCategoryName ?? '').trim()) {
+                return
+              }
               handleSaveItem(itemFormData)
             }}
             className="space-y-4"
           >
             <div>
               <label className="block text-sm font-medium text-gray-700 mb-1">Name *</label>
-              <Input
+              <POSInput
                 value={itemFormData.name ?? ''}
                 onChange={(e) => setItemFormData((f) => ({ ...f, name: e.target.value }))}
                 placeholder="Item name"
@@ -2648,7 +3302,7 @@ export function POSSystem() {
             </div>
             <div>
               <label className="block text-sm font-medium text-gray-700 mb-1">Description</label>
-              <Input
+              <POSInput
                 value={itemFormData.description ?? ''}
                 onChange={(e) => setItemFormData((f) => ({ ...f, description: e.target.value }))}
                 placeholder="Short description"
@@ -2656,17 +3310,18 @@ export function POSSystem() {
             </div>
             <div>
               <label className="block text-sm font-medium text-gray-700 mb-1">Base price (A$) *</label>
-              <Input
+              <POSInput
                 type="number"
+                keyboardType="number"
                 step="0.01"
                 min={0}
-                value={itemFormData.basePrice ?? 0}
+                value={String(itemFormData.basePrice ?? '')}
                 onChange={(e) => setItemFormData((f) => ({ ...f, basePrice: parseFloat(e.target.value) || 0 }))}
                 required
               />
             </div>
             {!editingItem && (
-              <div>
+              <div className="space-y-2">
                 <label className="block text-sm font-medium text-gray-700 mb-1">Category</label>
                 <select
                   value={itemFormData.categoryId ?? ''}
@@ -2676,12 +3331,21 @@ export function POSSystem() {
                   {categories.map((c) => (
                     <option key={c.id} value={c.id}>{c.name}</option>
                   ))}
+                  <option value="__new__">➕ New category...</option>
                 </select>
+                {(itemFormData.categoryId === '__new__') && (
+                  <POSInput
+                    value={itemFormData.newCategoryName ?? ''}
+                    onChange={(e) => setItemFormData((f) => ({ ...f, newCategoryName: e.target.value }))}
+                    placeholder="Enter new category name"
+                    className="text-sm"
+                  />
+                )}
               </div>
             )}
             <div>
               <label className="block text-sm font-medium text-gray-700 mb-1">Image URL</label>
-              <Input
+              <POSInput
                 value={itemFormData.image ?? ''}
                 onChange={(e) => setItemFormData((f) => ({ ...f, image: e.target.value }))}
                 placeholder="https://..."
@@ -2707,11 +3371,99 @@ export function POSSystem() {
                 <span className="text-sm font-medium text-gray-700">Popular</span>
               </label>
             </div>
+
+            <div>
+              <label className="block text-sm font-medium text-gray-700 mb-2">Remove options</label>
+              <p className="text-xs text-gray-500 mb-2">Options customers can select to remove (e.g. No onion). No extra charge.</p>
+              {(itemFormData.removeOptions ?? []).map((opt, idx) => (
+                <div key={opt.id || idx} className="flex gap-2 mb-2">
+                  <POSInput
+                    value={opt.name}
+                    onChange={(e) => setItemFormData((f) => {
+                      const list = [...(f.removeOptions ?? [])]
+                      list[idx] = { ...list[idx], name: e.target.value }
+                      return { ...f, removeOptions: list }
+                    })}
+                    placeholder="e.g. No onion"
+                    className="flex-1 text-sm"
+                  />
+                  <button
+                    type="button"
+                    onClick={() => setItemFormData((f) => ({ ...f, removeOptions: (f.removeOptions ?? []).filter((_, i) => i !== idx) }))}
+                    className="p-2 rounded-lg border border-red-200 text-red-600 hover:bg-red-50"
+                    aria-label="Remove option"
+                  >
+                    <Trash2 className="w-4 h-4" />
+                  </button>
+                </div>
+              ))}
+              <button
+                type="button"
+                onClick={() => setItemFormData((f) => ({ ...f, removeOptions: [...(f.removeOptions ?? []), { id: `rem_${Date.now()}`, name: '', price: 0 }] }))}
+                className="text-sm text-orange-600 font-medium hover:underline"
+              >
+                + Add remove option
+              </button>
+            </div>
+
+            <div>
+              <label className="block text-sm font-medium text-gray-700 mb-2">Extras</label>
+              <p className="text-xs text-gray-500 mb-2">Add-ons with optional price (e.g. Extra cheese A$2).</p>
+              {(itemFormData.extras ?? []).map((opt, idx) => (
+                <div key={opt.id || idx} className="flex gap-2 mb-2 items-center">
+                  <POSInput
+                    value={opt.name}
+                    onChange={(e) => setItemFormData((f) => {
+                      const list = [...(f.extras ?? [])]
+                      list[idx] = { ...list[idx], name: e.target.value }
+                      return { ...f, extras: list }
+                    })}
+                    placeholder="e.g. Extra cheese"
+                    className="flex-1 text-sm"
+                  />
+                  <POSInput
+                    type="number"
+                    keyboardType="number"
+                    step="0.01"
+                    min={0}
+                    value={String(opt.price ?? 0)}
+                    onChange={(e) => setItemFormData((f) => {
+                      const list = [...(f.extras ?? [])]
+                      list[idx] = { ...list[idx], price: parseFloat(e.target.value) || 0 }
+                      return { ...f, extras: list }
+                    })}
+                    placeholder="0"
+                    className="w-20 text-sm"
+                  />
+                  <span className="text-xs text-gray-500 w-6">A$</span>
+                  <button
+                    type="button"
+                    onClick={() => setItemFormData((f) => ({ ...f, extras: (f.extras ?? []).filter((_, i) => i !== idx) }))}
+                    className="p-2 rounded-lg border border-red-200 text-red-600 hover:bg-red-50"
+                    aria-label="Remove extra"
+                  >
+                    <Trash2 className="w-4 h-4" />
+                  </button>
+                </div>
+              ))}
+              <button
+                type="button"
+                onClick={() => setItemFormData((f) => ({ ...f, extras: [...(f.extras ?? []), { id: `ext_${Date.now()}`, name: '', price: 0 }] }))}
+                className="text-sm text-orange-600 font-medium hover:underline"
+              >
+                + Add extra
+              </button>
+            </div>
+
             <div className="flex gap-3 justify-end pt-2">
               <Button type="button" variant="ghost" onClick={closeItemModal}>
                 Cancel
               </Button>
-              <Button type="submit" variant="primary">
+              <Button
+                type="submit"
+                variant="primary"
+                disabled={!editingItem && itemFormData.categoryId === '__new__' && !(itemFormData.newCategoryName ?? '').trim()}
+              >
                 {editingItem ? 'Save changes' : 'Add item'}
               </Button>
             </div>
@@ -2755,13 +3507,14 @@ export function POSSystem() {
       </div>
             {discount && (
               <>
-                <Input
+                <POSInput
                   label={discount.type === 'percentage' ? 'Percentage (%)' : 'Amount ($)'}
                   type="number"
-                  value={discount.value}
+                  keyboardType="number"
+                  value={String(discount.value)}
                   onChange={(e) => setDiscount({ ...discount, value: parseFloat(e.target.value) || 0 })}
                 />
-                <Input
+                <POSInput
                   label="Discount Name (Optional)"
                   value={discount.name || ''}
                   onChange={(e) => setDiscount({ ...discount, name: e.target.value })}
@@ -2791,71 +3544,77 @@ export function POSSystem() {
         </DialogContent>
       </Dialog>
 
-      {/* Bottom Navigation Bar */}
-      <div className="bg-white border-t-2 border-gray-200 px-6 py-3 flex-shrink-0">
-        <div className="flex items-center justify-around">
-          <button
-            onClick={() => setActiveSection('menu')}
-            className={cn(
-              "flex flex-col items-center gap-1 transition-colors",
-              activeSection === 'menu' ? 'text-orange-600' : 'text-gray-600 hover:text-orange-600'
-            )}
+      {/* Bottom bar: same 65% / 35% split as cart so price + Pay align with cart column */}
+      <div className="bg-white border-t-2 border-gray-200 flex-shrink-0 flex min-h-[72px]">
+        {/* Left 65%: menu buttons (aligns with menu/content area) */}
+        <div className="w-[65%] min-w-0 flex-shrink-0 flex items-center px-4 py-3 border-r-2 border-gray-200">
+          <div className="grid grid-cols-3 gap-2 w-full max-w-xl">
+            <button
+              onClick={() => setActiveSection('menu')}
+              className={cn(
+                "flex flex-col items-center justify-center gap-0.5 py-2 px-2 sm:py-3 sm:px-4 transition-colors rounded-lg min-h-[56px] sm:min-h-[64px]",
+                activeSection === 'menu' ? 'text-orange-600 bg-orange-50/50' : 'text-gray-600 hover:text-orange-600 hover:bg-gray-50'
+              )}
+            >
+              <Home className="w-5 h-5 sm:w-6 sm:h-6 flex-shrink-0" />
+              <span className="text-xs sm:text-sm font-medium">Home</span>
+            </button>
+            <button
+              onClick={() => setActiveSection('orders')}
+              className={cn(
+                "flex flex-col items-center justify-center gap-0.5 py-2 px-2 sm:py-3 sm:px-4 transition-colors rounded-lg relative min-h-[56px] sm:min-h-[64px]",
+                activeSection === 'orders' ? 'text-orange-600 bg-orange-50/50' : 'text-gray-600 hover:text-orange-600 hover:bg-gray-50'
+              )}
+            >
+              <ShoppingCart className="w-5 h-5 sm:w-6 sm:h-6 flex-shrink-0" />
+              <span className="text-xs sm:text-sm font-medium">Orders</span>
+              {(pendingOrdersFromApi.length > 0 || orders.length > 0) && (
+                <Badge variant="danger" className="absolute top-1 right-2 text-xs px-1.5 py-0.5 min-w-[18px] text-center">
+                  {pendingOrdersFromApi.length > 0 ? pendingOrdersFromApi.length : orders.length}
+                </Badge>
+              )}
+            </button>
+            <button
+              onClick={() => { setMoreSubSection('main'); setActiveSection('more') }}
+              className={cn(
+                "flex flex-col items-center justify-center gap-0.5 py-2 px-2 sm:py-3 sm:px-4 transition-colors rounded-lg min-h-[56px] sm:min-h-[64px]",
+                activeSection === 'more' ? 'text-orange-600 bg-orange-50/50' : 'text-gray-600 hover:text-orange-600 hover:bg-gray-50'
+              )}
+            >
+              <Clock className="w-5 h-5 sm:w-6 sm:h-6 flex-shrink-0" />
+              <span className="text-xs sm:text-sm font-medium">More</span>
+            </button>
+          </div>
+        </div>
+
+        {/* Right 35%: Pay button left, pricing right (aligns with cart column) */}
+        <div className="w-[35%] min-w-[280px] flex-shrink-0 flex items-center justify-between gap-3 sm:gap-4 px-4 py-3 bg-gray-50">
+          <Button
+            onClick={() => setShowPaymentModal(true)}
+            disabled={cart.length === 0}
+            size="lg"
+            className="min-h-[52px] sm:min-h-[56px] px-4 sm:px-6 text-base sm:text-lg font-bold shadow-lg flex-shrink-0"
           >
-            <Receipt className="w-5 h-5" />
-            <span className="text-xs font-medium">Menu</span>
-          </button>
-          <button
-            onClick={() => setActiveSection('orders')}
-            className={cn(
-              "flex flex-col items-center gap-1 transition-colors relative",
-              activeSection === 'orders' ? 'text-orange-600' : 'text-gray-600 hover:text-orange-600'
+            <CreditCard className="w-5 h-5 sm:w-6 sm:h-6 mr-2" />
+            Pay
+          </Button>
+          <div className="text-right space-y-0.5 min-w-0">
+            <div className="flex flex-wrap justify-end gap-x-4 gap-y-0.5 text-xs text-gray-600">
+              <span>Subtotal (incl. GST): A${subtotalInclGst.toFixed(2)}</span>
+              <span>GST (10%): A${totalGst.toFixed(2)}</span>
+            </div>
+            {discount && (
+              <p className="text-xs text-green-600 font-medium">Discount: -A${discountAmount.toFixed(2)}</p>
             )}
-          >
-            <ShoppingCart className="w-5 h-5" />
-            <span className="text-xs font-medium">Orders</span>
-            {(pendingOrdersFromApi.length > 0 || orders.length > 0) && (
-              <Badge variant="danger" className="absolute -top-1 -right-1 text-xs px-1.5 py-0.5">
-                {pendingOrdersFromApi.length > 0 ? pendingOrdersFromApi.length : orders.length}
-              </Badge>
+            {surchargeApplied && (
+              <p className="text-xs text-gray-600">{surchargeApplied.label}: A${surchargeAmount.toFixed(2)}</p>
             )}
-          </button>
-          <button
-            onClick={() => setActiveSection('transactions')}
-            className={cn(
-              "flex flex-col items-center gap-1 transition-colors relative",
-              activeSection === 'transactions' ? 'text-orange-600' : 'text-gray-600 hover:text-orange-600'
-            )}
-          >
-            <TrendingUp className="w-5 h-5" />
-            <span className="text-xs font-medium">Transactions</span>
-            {transactions.length > 0 && (
-              <Badge variant="info" className="absolute -top-1 -right-1 text-xs px-1.5 py-0.5">
-                {transactions.length}
-              </Badge>
-            )}
-          </button>
-          <button
-            onClick={() => setActiveSection('items')}
-            className={cn(
-              "flex flex-col items-center gap-1 transition-colors",
-              activeSection === 'items' ? 'text-orange-600' : 'text-gray-600 hover:text-orange-600'
-            )}
-          >
-            <ChefHat className="w-5 h-5" />
-            <span className="text-xs font-medium">Items</span>
-          </button>
-          <button
-            onClick={() => setActiveSection('more')}
-            className={cn(
-              "flex flex-col items-center gap-1 transition-colors",
-              activeSection === 'more' ? 'text-orange-600' : 'text-gray-600 hover:text-orange-600'
-            )}
-          >
-            <Clock className="w-5 h-5" />
-            <span className="text-xs font-medium">More</span>
-          </button>
+            <p className="text-sm text-gray-500">TOTAL</p>
+            <p className="text-lg sm:text-xl font-bold text-orange-600 tabular-nums">A${total.toFixed(2)}</p>
+          </div>
         </div>
       </div>
     </div>
+    </POSKeyboardProvider>
   )
 }

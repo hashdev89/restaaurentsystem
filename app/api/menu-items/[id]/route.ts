@@ -3,7 +3,22 @@ import { supabase } from '@/lib/supabase'
 
 export const dynamic = 'force-dynamic'
 
-function toMenuItem(row: { id: string; restaurant_id: string; name: string; description: string | null; price: number; category: string; image: string | null; is_available: boolean }) {
+type MenuItemRow = {
+  id: string
+  restaurant_id: string
+  name: string
+  description: string | null
+  price: number
+  category: string
+  image: string | null
+  is_available: boolean
+  customizations?: unknown
+}
+
+function toMenuItem(row: MenuItemRow) {
+  const customizations = row.customizations != null && Array.isArray(row.customizations)
+    ? (row.customizations as { id: string; name: string; type: string; options: { id: string; name: string; price: number }[] }[])
+    : undefined
   return {
     id: row.id,
     restaurantId: row.restaurant_id,
@@ -13,6 +28,7 @@ function toMenuItem(row: { id: string; restaurant_id: string; name: string; desc
     category: row.category,
     image: row.image ?? '',
     isAvailable: row.is_available,
+    ...(customizations && customizations.length > 0 ? { customizations } : {}),
   }
 }
 
@@ -31,6 +47,7 @@ export async function PATCH(
     if (body.category !== undefined) updates.category = String(body.category).trim() || 'Other'
     if (body.image !== undefined) updates.image = body.image == null ? null : String(body.image).trim()
     if (body.isAvailable !== undefined) updates.is_available = body.isAvailable !== false
+    if (body.customizations !== undefined) updates.customizations = Array.isArray(body.customizations) ? body.customizations : null
     if (Object.keys(updates).length === 0) {
       return NextResponse.json({ error: 'No fields to update' }, { status: 400 })
     }
@@ -41,7 +58,7 @@ export async function PATCH(
       .select()
       .single()
     if (error) throw error
-    return NextResponse.json({ item: toMenuItem(data) })
+    return NextResponse.json({ item: toMenuItem(data as MenuItemRow) })
   } catch (err: unknown) {
     console.error('PATCH menu-items error:', err)
     const message = err && typeof err === 'object' && 'message' in err && typeof (err as { message: unknown }).message === 'string'

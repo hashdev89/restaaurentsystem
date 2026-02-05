@@ -1,7 +1,7 @@
 import { NextRequest, NextResponse } from 'next/server'
 import { supabase, getServiceRoleClient } from '@/lib/supabase'
 
-function toRestaurant(row: {
+type RestaurantRow = {
   id: string
   name: string
   description: string | null
@@ -14,7 +14,22 @@ function toRestaurant(row: {
   is_active: boolean
   rating: number
   review_count: number
-}) {
+  pos_enabled?: boolean | null
+  kds_enabled?: boolean | null
+  pos_pin_required?: boolean | null
+  kds_pin_required?: boolean | null
+  sunday_surcharge_enabled?: boolean | null
+  sunday_surcharge_percent?: number | null
+  public_holiday_surcharge_enabled?: boolean | null
+  public_holiday_surcharge_percent?: number | null
+  public_holiday_dates?: unknown
+  surcharge_manual_override?: string | null
+}
+
+function toRestaurant(row: RestaurantRow) {
+  const holidayDates = row.public_holiday_dates != null && Array.isArray(row.public_holiday_dates)
+    ? (row.public_holiday_dates as string[])
+    : []
   return {
     id: row.id,
     name: row.name,
@@ -28,6 +43,35 @@ function toRestaurant(row: {
     isActive: row.is_active,
     rating: Number(row.rating),
     reviewCount: Number(row.review_count),
+    posEnabled: row.pos_enabled !== false,
+    kdsEnabled: row.kds_enabled !== false,
+    posPinRequired: row.pos_pin_required === true,
+    kdsPinRequired: row.kds_pin_required === true,
+    sundaySurchargeEnabled: row.sunday_surcharge_enabled === true,
+    sundaySurchargePercent: row.sunday_surcharge_percent != null ? Number(row.sunday_surcharge_percent) : 0,
+    publicHolidaySurchargeEnabled: row.public_holiday_surcharge_enabled === true,
+    publicHolidaySurchargePercent: row.public_holiday_surcharge_percent != null ? Number(row.public_holiday_surcharge_percent) : 0,
+    publicHolidayDates: holidayDates,
+    surchargeManualOverride: (row.surcharge_manual_override === 'sunday' || row.surcharge_manual_override === 'public_holiday' || row.surcharge_manual_override === 'none') ? row.surcharge_manual_override : 'auto',
+  }
+}
+
+export async function GET(
+  _request: NextRequest,
+  { params }: { params: Promise<{ id: string }> }
+) {
+  try {
+    const { id } = await params
+    const { data, error } = await supabase
+      .from('restaurants')
+      .select('*')
+      .eq('id', id)
+      .single()
+    if (error || !data) return NextResponse.json({ error: 'Restaurant not found' }, { status: 404 })
+    return NextResponse.json({ restaurant: toRestaurant(data as RestaurantRow) })
+  } catch (err: unknown) {
+    console.error('GET restaurant error:', err)
+    return NextResponse.json({ error: 'Failed to fetch restaurant' }, { status: 500 })
   }
 }
 
@@ -55,6 +99,18 @@ export async function PATCH(
       const v = body.longitude === '' || body.longitude == null ? null : Number(body.longitude)
       updates.longitude = typeof v === 'number' && !Number.isNaN(v) ? v : null
     }
+    if (typeof body.posEnabled === 'boolean') updates.pos_enabled = body.posEnabled
+    if (typeof body.kdsEnabled === 'boolean') updates.kds_enabled = body.kdsEnabled
+    if (typeof body.posPinRequired === 'boolean') updates.pos_pin_required = body.posPinRequired
+    if (typeof body.kdsPinRequired === 'boolean') updates.kds_pin_required = body.kdsPinRequired
+    if (typeof body.sundaySurchargeEnabled === 'boolean') updates.sunday_surcharge_enabled = body.sundaySurchargeEnabled
+    if (typeof body.sundaySurchargePercent === 'number' && body.sundaySurchargePercent >= 0) updates.sunday_surcharge_percent = body.sundaySurchargePercent
+    if (typeof body.publicHolidaySurchargeEnabled === 'boolean') updates.public_holiday_surcharge_enabled = body.publicHolidaySurchargeEnabled
+    if (typeof body.publicHolidaySurchargePercent === 'number' && body.publicHolidaySurchargePercent >= 0) updates.public_holiday_surcharge_percent = body.publicHolidaySurchargePercent
+    if (Array.isArray(body.publicHolidayDates)) updates.public_holiday_dates = body.publicHolidayDates
+    if (body.surchargeManualOverride === 'auto' || body.surchargeManualOverride === 'sunday' || body.surchargeManualOverride === 'public_holiday' || body.surchargeManualOverride === 'none') {
+      updates.surcharge_manual_override = body.surchargeManualOverride
+    }
 
     if (Object.keys(updates).length === 0) {
       return NextResponse.json({ error: 'No valid fields to update' }, { status: 400 })
@@ -70,7 +126,7 @@ export async function PATCH(
     if (error) throw error
     if (!data) return NextResponse.json({ error: 'Restaurant not found' }, { status: 404 })
 
-    return NextResponse.json({ restaurant: toRestaurant(data) })
+    return NextResponse.json({ restaurant: toRestaurant(data as RestaurantRow) })
   } catch (err: unknown) {
     console.error('PATCH restaurant error:', err)
     const message = err instanceof Error ? err.message : 'Failed to update restaurant'
