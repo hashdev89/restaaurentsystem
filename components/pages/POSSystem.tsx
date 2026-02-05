@@ -21,11 +21,8 @@ import {
   Receipt,
   Printer,
   User,
-  Hash,
   Percent,
-  MessageSquare,
   Star,
-  Zap,
   ArrowLeft,
   Clock,
   TrendingUp,
@@ -622,7 +619,8 @@ function buildCategoriesFromMenuItems(items: { id: string; name: string; descrip
   for (const item of items) {
     const cat = item.category?.trim() || 'Other'
     if (!byCategory.has(cat)) byCategory.set(cat, [])
-    byCategory.get(cat)!.push(item)
+    const list = byCategory.get(cat)
+    if (list) list.push(item)
   }
   return Array.from(byCategory.entries()).map(([name, catItems]) => ({
     id: `cat_${name.replace(/\s+/g, '_')}`,
@@ -721,7 +719,7 @@ export function POSSystem({ restaurantId: restaurantIdProp }: { restaurantId?: s
   })
 
   // When linked to a restaurant (e.g. /restaurant/[id]/pos), use that restaurant and load menu from API
-  const [menuSyncLoading, setMenuSyncLoading] = useState(false)
+  const [, setMenuSyncLoading] = useState(false)
   const fetchMenuFromApi = useCallback(async (rid: string) => {
     setMenuSyncLoading(true)
     try {
@@ -1207,11 +1205,6 @@ export function POSSystem({ restaurantId: restaurantIdProp }: { restaurantId?: s
     const receiptWindow = window.open('', '_blank', 'width=400,height=600')
     if (!receiptWindow) return
 
-    const currentDate = new Date().toLocaleString('en-AU', {
-      dateStyle: 'short',
-      timeStyle: 'short'
-    })
-
     const receiptHTML = `
 <!DOCTYPE html>
 <html>
@@ -1359,7 +1352,7 @@ export function POSSystem({ restaurantId: restaurantIdProp }: { restaurantId?: s
     <div class="business-info" style="text-align: center;">
       <div class="business-info">ABC Retail Pty Ltd</div>
       <div class="business-info">ABN: 12 345 678 901</div>
-      <div class="order-info-row"><span>Date:</span><span>${new Date().toLocaleDateString('en-AU', { day: '2-digit', month: 'short', year: 'numeric' })}</span></div>
+      <div class="order-info-row"><span>Date:</span><span>${new Date().toLocaleString('en-AU', { dateStyle: 'short', timeStyle: 'short' })}</span></div>
       <div class="order-info-row"><span>Receipt No:</span><span>POS-${orderNumber}</span></div>
     </div>
     <div class="divider">------------------------------------------</div>
@@ -1513,18 +1506,8 @@ export function POSSystem({ restaurantId: restaurantIdProp }: { restaurantId?: s
       // Optionally close after printing (uncomment if desired)
       // receiptWindow.close()
     }, 250)
-  }, [cart, orderNumber, orderType, tableNumber, customerName, subtotalExGst, totalGst, subtotalInclGst, discount, discountAmount, tip, tipPercentage, total, paymentMethod, orderNotes, cashTendered, mixCardAmount, mixCashAmount])
-
-  const handleTip = (percentage: number) => {
-    setTipPercentage(percentage)
-    const tipAmount = (subtotalInclGst - discountAmount) * (percentage / 100)
-    setTip(tipAmount)
-  }
-
-  const removeTip = () => {
-    setTip(0)
-    setTipPercentage(null)
-  }
+    // eslint-disable-next-line react-hooks/exhaustive-deps -- receipt template uses all listed deps
+  }, [cart, orderNumber, orderType, tableNumber, customerName, subtotalExGst, totalGst, subtotalInclGst, discount, discountAmount, tip, tipPercentage, total, paymentMethod, orderNotes, cashTendered, mixCardAmount, mixCashAmount, surchargeAmount, surchargeApplied])
 
   const handlePayment = async () => {
     if (cart.length === 0) return
@@ -1591,9 +1574,9 @@ export function POSSystem({ restaurantId: restaurantIdProp }: { restaurantId?: s
           headers: { 'Content-Type': 'application/json' },
           body: JSON.stringify({
             restaurantId: defaultRestaurantId || (typeof process !== 'undefined' && process.env ? process.env.NEXT_PUBLIC_DEFAULT_RESTAURANT_ID : '') || '',
-            customerName: customerName || (orderType === 'dine-in' ? `Table ${tableNumber}` : 'Walk-in'),
-            customerEmail: '',
-            customerPhone: '',
+            customerName: customerName?.trim() || (orderType === 'dine-in' ? `Table ${tableNumber}` : 'Walk-in'),
+            customerEmail: 'pos@restaurant.local',
+            customerPhone: 'N/A',
             items: cart.map((item) => ({
               menuItemId: item.id,
               name: item.name,
@@ -1611,7 +1594,9 @@ export function POSSystem({ restaurantId: restaurantIdProp }: { restaurantId?: s
         })
 
         if (!orderResponse.ok) {
-          warning('Order saved locally', 'Backend sync failed. Order stored offline.')
+          const errData = await orderResponse.json().catch(() => ({}))
+          const errMsg = errData?.error || `Server returned ${orderResponse.status}`
+          warning('Order saved locally', `Backend sync failed: ${errMsg}. Order stored offline.`)
         } else {
           const data = await orderResponse.json().catch(() => ({}))
           success('Payment complete', `Order #${orderNumber} saved`, {
@@ -1621,7 +1606,8 @@ export function POSSystem({ restaurantId: restaurantIdProp }: { restaurantId?: s
         }
       } catch (orderError) {
         console.warn('Order API error, continuing with local storage:', orderError)
-        warning('Order saved locally', 'Could not sync to server. Order stored offline.')
+        const errMsg = orderError instanceof Error ? orderError.message : 'Network or server error'
+        warning('Order saved locally', `Could not sync to server: ${errMsg}. Order stored offline.`)
       }
 
       setTimeout(() => printReceipt(), 500)
@@ -1743,17 +1729,6 @@ export function POSSystem({ restaurantId: restaurantIdProp }: { restaurantId?: s
       categoryId,
     })
     setShowItemModal(true)
-  }
-
-  const handleDeleteItem = (itemId: string) => {
-    if (confirm('Are you sure you want to delete this item?')) {
-      setCategories((prev) =>
-        prev.map((cat) => ({
-          ...cat,
-          subItems: cat.subItems.filter((s) => s.id !== itemId),
-        }))
-      )
-    }
   }
 
   const handleSaveItem = async (data: Partial<POSSubItem> & { categoryId?: string; newCategoryName?: string; removeOptions?: CustomizationOption[]; extras?: CustomizationOption[] }) => {

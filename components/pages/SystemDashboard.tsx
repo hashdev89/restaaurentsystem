@@ -464,7 +464,6 @@ export function SystemDashboard() {
       kitchen: true,
     },
     integrations: {
-      square: true,
       supabase: true,
       mapbox: true,
     },
@@ -1280,13 +1279,6 @@ export function SystemDashboard() {
                   Integrations
                 </h3>
                 <div className="space-y-3">
-                  <div className="flex items-center justify-between py-2 border-b border-gray-100">
-                    <div className="flex items-center gap-2">
-                      <CreditCard className="w-4 h-4 text-gray-500" />
-                      <span className="text-sm font-medium">Square (Payments)</span>
-                    </div>
-                    <span className="text-xs px-2 py-1 rounded-full bg-green-100 text-green-700">Connected</span>
-                  </div>
                   <div className="flex items-center justify-between py-2 border-b border-gray-100">
                     <div className="flex items-center gap-2">
                       <Database className="w-4 h-4 text-gray-500" />

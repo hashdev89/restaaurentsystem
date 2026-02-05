@@ -3,7 +3,9 @@
 import { useState, useEffect } from 'react'
 import { useRouter } from 'next/navigation'
 import Link from 'next/link'
-import { ArrowLeft, CreditCard, Lock } from 'lucide-react'
+import { ArrowLeft } from 'lucide-react'
+import { loadStripe } from '@stripe/stripe-js'
+import { Elements, PaymentElement, useStripe, useElements } from '@stripe/react-stripe-js'
 import { useCart } from '../providers/CartProvider'
 import { useNotification } from '../providers/NotificationProvider'
 import { Button } from '../ui/Button'
@@ -12,6 +14,9 @@ import { Card } from '../ui/Card'
 import { Select } from '../ui/Select'
 import { OrderType } from '@/types'
 import { gstAmount, priceInclGst } from '@/lib/gst'
+
+const stripePublishableKey = process.env.NEXT_PUBLIC_STRIPE_PUBLISHABLE_KEY || ''
+const stripePromise = stripePublishableKey ? loadStripe(stripePublishableKey) : null
 
 const CUSTOMER_PROFILE_KEY = 'restaurant-customer-profile'
 
@@ -44,6 +49,63 @@ function saveCustomerProfile(profile: { name: string; email: string; phone: stri
   }
 }
 
+type StripePayFormProps = {
+  orderId: string
+  paymentIntentId: string
+  amountDisplay: string
+  onSuccess: () => void
+  onError: (message: string) => void
+}
+
+function StripePayForm({ orderId, paymentIntentId, amountDisplay, onSuccess, onError }: StripePayFormProps) {
+  const stripe = useStripe()
+  const elements = useElements()
+  const [isConfirming, setIsConfirming] = useState(false)
+
+  const handlePay = async (e: React.FormEvent) => {
+    e.preventDefault()
+    if (!stripe || !elements) return
+    setIsConfirming(true)
+    try {
+      const { error } = await stripe.confirmPayment({
+        elements,
+        confirmParams: {
+          return_url: `${window.location.origin}/confirmation?orderId=${orderId}&orderType=pickup`,
+          receipt_email: undefined
+        }
+      })
+      if (error) {
+        onError(error.message || 'Payment failed')
+        return
+      }
+      const res = await fetch('/api/stripe/confirm-payment', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ orderId, paymentIntentId })
+      })
+      if (!res.ok) {
+        const data = await res.json().catch(() => ({}))
+        onError(data.error || 'Could not confirm payment')
+        return
+      }
+      onSuccess()
+    } catch (err) {
+      onError(err instanceof Error ? err.message : 'Payment failed')
+    } finally {
+      setIsConfirming(false)
+    }
+  }
+
+  return (
+    <form onSubmit={handlePay} className="space-y-4">
+      <PaymentElement options={{ layout: 'tabs' }} />
+      <Button type="submit" size="lg" className="w-full" isLoading={isConfirming} disabled={!stripe || isConfirming}>
+        {isConfirming ? 'Processing...' : `Pay ${amountDisplay}`}
+      </Button>
+    </form>
+  )
+}
+
 export function Checkout() {
   const { items, total, clearCart, tableNumber: cartTable } = useCart()
   const { success, error } = useNotification()
@@ -51,6 +113,11 @@ export function Checkout() {
   const [isProcessing, setIsProcessing] = useState(false)
   const [orderType, setOrderType] = useState<OrderType>('pickup')
   const [tableNumber, setTableNumber] = useState(cartTable ?? '')
+
+  // Stripe: 'pay-later' = pay on pickup; 'pay-now' = pay with card. After creating order we get clientSecret and show Stripe form.
+  const [paymentMethod, setPaymentMethod] = useState<'pay-later' | 'pay-now'>('pay-later')
+  const [stripeStep, setStripeStep] = useState<'form' | 'payment'>('form')
+  const [stripeData, setStripeData] = useState<{ orderId: string; clientSecret: string; paymentIntentId: string } | null>(null)
 
   // Dine-in seating (only used when orderType === 'dine-in')
   const [dineInGuests, setDineInGuests] = useState<'single' | 'group'>('single')
@@ -108,7 +175,7 @@ export function Checkout() {
     return parts.join(' ')
   }
 
-  const createOrderInSupabase = async (opts: { paymentStatus: string; squarePaymentId?: string }) => {
+  const createOrderInSupabase = async (opts: { paymentStatus: string }) => {
     if (!items.length) {
       throw new Error('Your cart is empty. Add items before checkout.')
     }
@@ -132,8 +199,7 @@ export function Checkout() {
         orderType,
         tableNumber: orderType === 'dine-in' ? tableNumber : null,
         specialRequests: specialRequests || undefined,
-        paymentStatus: opts.paymentStatus,
-        squarePaymentId: opts.squarePaymentId || null
+        paymentStatus: opts.paymentStatus
       })
     })
     if (!orderResponse.ok) {
@@ -143,73 +209,72 @@ export function Checkout() {
     return orderResponse.json()
   }
 
-  const handlePlaceOrderPayLater = async (e: React.FormEvent, payAtLabel: string) => {
-    e.preventDefault()
-    if (!formData.name.trim() || !formData.email.trim() || !formData.phone.trim()) {
-      error('Missing details', 'Please enter name, email and phone.')
-      return
-    }
-    setIsProcessing(true)
-    try {
-      const orderData = await createOrderInSupabase({ paymentStatus: 'pending' })
-      clearCart()
-      success('Order placed', `Order sent to the restaurant. ${payAtLabel}`, {
-        actionHref: `/confirmation?orderId=${orderData.orderId}&orderType=${orderType}`,
-        actionLabel: 'View confirmation'
-      })
-      router.push(`/confirmation?orderId=${orderData.orderId}&orderType=${orderType}`)
-    } catch (err: unknown) {
-      const msg = err instanceof Error ? err.message : 'Failed to place order'
-      error('Order failed', msg)
-    } finally {
-      setIsProcessing(false)
-    }
-  }
-
   const handleSubmit = async (e: React.FormEvent) => {
     e.preventDefault()
     if (!formData.name.trim() || !formData.email.trim() || !formData.phone.trim()) {
       error('Missing details', 'Please enter your name, email and phone number.')
       return
     }
-    setIsProcessing(true)
 
-    try {
-      const paymentResponse = await fetch('/api/square/payment', {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({
-          amount: finalTotal,
-          sourceId: 'card',
-          orderId: `ORD-${Date.now()}`
-        })
-      })
-
-      if (!paymentResponse.ok) {
-        const errorData = await paymentResponse.json()
-        throw new Error(errorData.error || 'Payment failed')
+    if (paymentMethod === 'pay-now' && stripeStep === 'form') {
+      if (!stripePromise) {
+        error('Stripe not configured', 'Pay with card is not available. Use pay on pickup or add Stripe keys to .env.')
+        return
       }
-
-      const paymentData = await paymentResponse.json()
-      const orderData = await createOrderInSupabase({
-        paymentStatus: paymentData.status === 'COMPLETED' ? 'captured' : 'authorized',
-        squarePaymentId: paymentData.paymentId
-      })
-
-      saveCustomerProfile({ name: formData.name, email: formData.email, phone: formData.phone })
-      clearCart()
-      success('Order placed', `Order #${orderData.orderId} confirmed. Redirecting…`, {
-        actionHref: `/confirmation?orderId=${orderData.orderId}&orderType=${orderType}`,
-        actionLabel: 'View confirmation',
-      })
-      router.push(`/confirmation?orderId=${orderData.orderId}&orderType=${orderType}`)
-    } catch (err: unknown) {
-      const msg = err instanceof Error ? err.message : 'Payment failed. Please try again.'
-      console.error('Checkout error:', err)
-      error('Checkout failed', msg, { duration: 6000 })
-    } finally {
-      setIsProcessing(false)
+      setIsProcessing(true)
+      try {
+        const orderData = await createOrderInSupabase({ paymentStatus: 'pending' })
+        saveCustomerProfile({ name: formData.name, email: formData.email, phone: formData.phone })
+        const amountInCents = Math.round(finalTotal * 100)
+        const res = await fetch('/api/stripe/create-payment-intent', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ amountInCents, orderId: orderData.orderId, currency: 'aud' })
+        })
+        if (!res.ok) {
+          const data = await res.json().catch(() => ({}))
+          throw new Error(data.error || 'Failed to create payment')
+        }
+        const { clientSecret, paymentIntentId } = await res.json()
+        setStripeData({ orderId: orderData.orderId, clientSecret, paymentIntentId })
+        setStripeStep('payment')
+      } catch (err: unknown) {
+        const msg = err instanceof Error ? err.message : 'Failed to start payment'
+        error('Payment error', msg)
+      } finally {
+        setIsProcessing(false)
+      }
+      return
     }
+
+    if (paymentMethod === 'pay-later') {
+      setIsProcessing(true)
+      try {
+        const orderData = await createOrderInSupabase({ paymentStatus: 'pending' })
+        saveCustomerProfile({ name: formData.name, email: formData.email, phone: formData.phone })
+        clearCart()
+        success('Order placed', `Order #${orderData.orderId} confirmed. Pay when you collect.`, {
+          actionHref: `/confirmation?orderId=${orderData.orderId}&orderType=${orderType}`,
+          actionLabel: 'View confirmation',
+        })
+        router.push(`/confirmation?orderId=${orderData.orderId}&orderType=${orderType}`)
+      } catch (err: unknown) {
+        const msg = err instanceof Error ? err.message : 'Failed to place order.'
+        console.error('Checkout error:', err)
+        error('Checkout failed', msg, { duration: 6000 })
+      } finally {
+        setIsProcessing(false)
+      }
+    }
+  }
+
+  const handleStripePaymentSuccess = () => {
+    clearCart()
+    success('Payment successful', 'Your order has been placed and paid.', {
+      actionHref: `/confirmation?orderId=${stripeData?.orderId}&orderType=${orderType}`,
+      actionLabel: 'View confirmation'
+    })
+    router.push(`/confirmation?orderId=${stripeData?.orderId}&orderType=${orderType}`)
   }
 
   return (
@@ -354,53 +419,70 @@ export function Checkout() {
               </Card>
             )}
 
-            {/* Payment Info */}
+            {/* Payment: pay on pickup or pay with card (Stripe) */}
             <Card
-              header={<h2 className="text-lg font-semibold">Payment Details</h2>}
+              header={<h2 className="text-lg font-semibold">Payment</h2>}
             >
-              <div className="bg-blue-50 border border-blue-100 rounded-md p-4 mb-6 flex items-start">
-                <Lock className="w-5 h-5 text-blue-500 mr-3 mt-0.5 flex-shrink-0" />
-                <p className="text-sm text-blue-700">
-                  This is a secure 128-bit SSL encrypted payment. Your card details are safe.
-                </p>
-              </div>
-
-              <div className="space-y-4">
-                <Input
-                  label="Card Number"
-                  name="cardNumber"
-                  value={formData.cardNumber}
-                  onChange={handleInputChange}
-                  required
-                  placeholder="0000 0000 0000 0000"
-                  maxLength={19}
-                />
-                <div className="grid grid-cols-2 gap-4">
-                  <Input
-                    label="Expiry Date"
-                    name="expiry"
-                    value={formData.expiry}
-                    onChange={handleInputChange}
-                    required
-                    placeholder="MM/YY"
-                    maxLength={5}
-                  />
-                  <Input
-                    label="CVC"
-                    name="cvc"
-                    value={formData.cvc}
-                    onChange={handleInputChange}
-                    required
-                    placeholder="123"
-                    maxLength={4}
-                  />
+              {!stripeData ? (
+                <>
+                  <div className="space-y-3">
+                    <label className="flex items-center gap-2 cursor-pointer">
+                      <input
+                        type="radio"
+                        name="paymentMethod"
+                        checked={paymentMethod === 'pay-later'}
+                        onChange={() => setPaymentMethod('pay-later')}
+                        className="rounded-full border-gray-300 text-orange-600 focus:ring-orange-500"
+                      />
+                      <span className="text-gray-700">Pay when you collect</span>
+                    </label>
+                    {stripePromise && (
+                      <label className="flex items-center gap-2 cursor-pointer">
+                        <input
+                          type="radio"
+                          name="paymentMethod"
+                          checked={paymentMethod === 'pay-now'}
+                          onChange={() => setPaymentMethod('pay-now')}
+                          className="rounded-full border-gray-300 text-orange-600 focus:ring-orange-500"
+                        />
+                        <span className="text-gray-700">Pay with card (Stripe)</span>
+                      </label>
+                    )}
+                  </div>
+                  {paymentMethod === 'pay-later' && (
+                    <p className="text-sm text-gray-600 mt-2">
+                      The restaurant will confirm payment at pickup or delivery.
+                    </p>
+                  )}
+                  {paymentMethod === 'pay-now' && (
+                    <p className="text-sm text-gray-600 mt-2">
+                      You will pay securely with your card before placing the order.
+                    </p>
+                  )}
+                </>
+              ) : (
+                <div className="space-y-4">
+                  <p className="text-sm text-gray-600">Complete payment with your card.</p>
+                  {stripePromise && stripeData && (
+                    <Elements stripe={stripePromise} options={{ clientSecret: stripeData.clientSecret, appearance: { theme: 'stripe' } }}>
+                      <StripePayForm
+                        orderId={stripeData.orderId}
+                        paymentIntentId={stripeData.paymentIntentId}
+                        amountDisplay={`A$${finalTotal.toFixed(2)}`}
+                        onSuccess={handleStripePaymentSuccess}
+                        onError={(msg) => error('Payment failed', msg)}
+                      />
+                    </Elements>
+                  )}
+                  <button
+                    type="button"
+                    onClick={() => { setStripeData(null); setStripeStep('form') }}
+                    className="text-sm text-gray-500 hover:text-gray-700 underline"
+                  >
+                    ← Back to form
+                  </button>
                 </div>
-              </div>
-
-              <div className="mt-6 flex items-center justify-center text-gray-400 gap-2">
-                <CreditCard className="w-6 h-6" />
-                <span className="text-sm">Powered by Square</span>
-              </div>
+              )}
             </Card>
           </div>
 
@@ -438,17 +520,21 @@ export function Checkout() {
                 <span>A${finalTotal.toFixed(2)}</span>
               </div>
 
-              {/* Buttons - responsive */}
-              <div className="flex flex-col gap-3">
-                <Button
-                  type="submit"
-                  size="lg"
-                  className="w-full text-base sm:text-lg py-3 sm:py-4 min-h-[48px] sm:min-h-[56px]"
-                  isLoading={isProcessing}
-                >
-                  {isProcessing ? 'Processing...' : `Pay A$${finalTotal.toFixed(2)} now`}
-                </Button>
-              </div>
+              {/* Buttons - responsive; hide when Stripe payment step is active (pay button is in Payment card) */}
+              {!stripeData && (
+                <div className="flex flex-col gap-3">
+                  <Button
+                    type="submit"
+                    size="lg"
+                    className="w-full text-base sm:text-lg py-3 sm:py-4 min-h-[48px] sm:min-h-[56px]"
+                    isLoading={isProcessing}
+                  >
+                    {paymentMethod === 'pay-now'
+                      ? (isProcessing ? 'Preparing payment...' : 'Continue to payment')
+                      : (isProcessing ? 'Placing order...' : `Place order (A$${finalTotal.toFixed(2)})`)}
+                  </Button>
+                </div>
+              )}
             </Card>
           </div>
         </form>

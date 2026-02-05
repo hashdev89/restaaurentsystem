@@ -88,6 +88,7 @@ export function MenuItemForm({ initialData, categoryOptions, onSubmit, onCancel 
         options: extras.filter((o) => (o.name ?? '').trim()).map((o, i) => ({ id: o.id || `ext_${i}`, name: o.name.trim(), price: Number(o.price) || 0 }))
       })
     }
+    // eslint-disable-next-line @typescript-eslint/no-unused-vars -- newCategoryName intentionally omitted from submit
     const { newCategoryName: _n, ...rest } = formData
     onSubmit({ ...rest, category, customizations: customizations.length > 0 ? customizations : undefined })
   }

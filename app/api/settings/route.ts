@@ -7,7 +7,7 @@ const DEFAULT_SETTINGS = {
   currency: 'AUD',
   timezone: 'Australia/Sydney',
   features: { booking: true, pos: true, kitchen: true },
-  integrations: { square: true, supabase: true, mapbox: true },
+  integrations: { supabase: true, mapbox: true },
 }
 
 function rowToSettings(row: {
@@ -99,7 +99,6 @@ export async function PATCH(request: NextRequest) {
       }
     if (integrations && typeof integrations === 'object')
       updates.integrations = {
-        square: integrations.square !== false,
         supabase: integrations.supabase !== false,
         mapbox: integrations.mapbox !== false,
       }
