@@ -85,7 +85,7 @@ export function MenuItemForm({ initialData, categoryOptions, allowDeleteOptions 
   useEffect(() => {
     setSizePrices(defaultSizes)
     setSizesEnabled(Boolean(initialData?.sizes?.length))
-  }, [initialData?.sizes, initialData?.price])
+  }, [initialData?.sizes, initialData?.price, defaultSizes])
 
   const handleSubmit = (e: React.FormEvent) => {
     e.preventDefault()

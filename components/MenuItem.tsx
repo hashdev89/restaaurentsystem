@@ -29,7 +29,7 @@ export function MenuItem({ item }: MenuItemProps) {
   const hasSizes = item.sizes && item.sizes.length > 0
   const hasCustomizations = item.customizations && item.customizations.length > 0
   const [selectedSize, setSelectedSize] = useState<typeof item.sizes[number] | null>(
-    hasSizes && item.sizes!.length > 0 ? item.sizes![0] : null
+    hasSizes && item.sizes?.length ? item.sizes[0] ?? null : null
   )
   const [showCustomizeModal, setShowCustomizeModal] = useState(false)
   // Modal state: removes = option ids, extras = option ids, spice, request
@@ -39,8 +39,8 @@ export function MenuItem({ item }: MenuItemProps) {
   const [specialRequest, setSpecialRequest] = useState('')
 
   const basePrice = hasSizes && selectedSize ? selectedSize.price : item.price
-  const removeGroup = hasCustomizations ? item.customizations!.find((g) => g.type === 'remove') : null
-  const extraGroup = hasCustomizations ? item.customizations!.find((g) => g.type === 'extra') : null
+  const removeGroup = hasCustomizations ? item.customizations?.find((g) => g.type === 'remove') ?? null : null
+  const extraGroup = hasCustomizations ? item.customizations?.find((g) => g.type === 'extra') ?? null : null
   const extrasTotal = (extraGroup?.options ?? [])
     .filter((o) => selectedExtras.includes(o.id))
     .reduce((sum, o) => sum + (o.price ?? 0), 0)
