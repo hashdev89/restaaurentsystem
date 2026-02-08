@@ -113,7 +113,12 @@ function StripePayForm({ orderId, paymentIntentId, amountDisplay, onSuccess, onE
 
   return (
     <form onSubmit={handlePay} className="space-y-4">
-      <PaymentElement options={{ layout: 'tabs' }} />
+      <PaymentElement
+        options={{
+          layout: 'tabs',
+          paymentMethodOrder: ['apple_pay', 'google_pay', 'card', 'link']
+        }}
+      />
       <Button type="submit" size="lg" className="w-full" isLoading={isConfirming} disabled={!stripe || isConfirming}>
         {isConfirming ? 'Processing...' : `Pay ${amountDisplay}`}
       </Button>
@@ -452,7 +457,7 @@ export function Checkout() {
               </Card>
             )}
 
-            {/* Payment: pay on pickup or pay with card (Stripe) */}
+            {/* Payment: standard section — pay on collect or pay now (Card / Apple Pay / Google Pay) */}
             <Card
               header={<h2 className="text-lg font-semibold">Payment</h2>}
             >
@@ -469,33 +474,37 @@ export function Checkout() {
                       />
                       <span className="text-gray-700">Pay when you collect</span>
                     </label>
+                    {paymentMethod === 'pay-later' && (
+                      <p className="text-sm text-gray-600 ml-6">
+                        The restaurant will confirm payment at pickup or delivery.
+                      </p>
+                    )}
                     {stripePromise && (
-                      <label className="flex items-center gap-2 cursor-pointer">
-                        <input
-                          type="radio"
-                          name="paymentMethod"
-                          checked={paymentMethod === 'pay-now'}
-                          onChange={() => setPaymentMethod('pay-now')}
-                          className="rounded-full border-gray-300 text-orange-600 focus:ring-orange-500"
-                        />
-                        <span className="text-gray-700">Pay with card (Stripe)</span>
-                      </label>
+                      <>
+                        <label className="flex items-center gap-2 cursor-pointer">
+                          <input
+                            type="radio"
+                            name="paymentMethod"
+                            checked={paymentMethod === 'pay-now'}
+                            onChange={() => setPaymentMethod('pay-now')}
+                            className="rounded-full border-gray-300 text-orange-600 focus:ring-orange-500"
+                          />
+                          <span className="text-gray-700">Pay now — Card, Apple Pay, Google Pay</span>
+                        </label>
+                        {paymentMethod === 'pay-now' && (
+                          <p className="text-sm text-gray-600 ml-6">
+                            Pay securely before placing your order. Card, Apple Pay, and Google Pay accepted.
+                          </p>
+                        )}
+                      </>
                     )}
                   </div>
-                  {paymentMethod === 'pay-later' && (
-                    <p className="text-sm text-gray-600 mt-2">
-                      The restaurant will confirm payment at pickup or delivery.
-                    </p>
-                  )}
-                  {paymentMethod === 'pay-now' && (
-                    <p className="text-sm text-gray-600 mt-2">
-                      You will pay securely with your card before placing the order.
-                    </p>
-                  )}
                 </>
               ) : (
                 <div className="space-y-4">
-                  <p className="text-sm text-gray-600">Complete payment with your card.</p>
+                  <p className="text-sm text-gray-600">
+                    Pay with Card, Apple Pay, or Google Pay. Apple Pay and Google Pay appear as options when your device and browser support them.
+                  </p>
                   {stripePromise && stripeData && (
                     <Elements stripe={stripePromise} options={{ clientSecret: stripeData.clientSecret, appearance: { theme: 'stripe' } }}>
                       <StripePayForm
