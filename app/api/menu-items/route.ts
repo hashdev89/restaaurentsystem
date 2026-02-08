@@ -21,11 +21,15 @@ type MenuItemRow = {
   image: string | null
   is_available: boolean
   customizations?: unknown
+  sizes?: unknown
 }
 
 function toMenuItem(row: MenuItemRow) {
   const customizations = row.customizations != null && Array.isArray(row.customizations)
     ? (row.customizations as { id: string; name: string; type: string; options: { id: string; name: string; price: number }[] }[])
+    : undefined
+  const sizes = row.sizes != null && Array.isArray(row.sizes)
+    ? (row.sizes as { name: string; price: number }[]).filter((s) => s && typeof s.name === 'string')
     : undefined
   return {
     id: row.id,
@@ -37,6 +41,7 @@ function toMenuItem(row: MenuItemRow) {
     image: row.image ?? '',
     isAvailable: row.is_available,
     ...(customizations && customizations.length > 0 ? { customizations } : {}),
+    ...(sizes && sizes.length > 0 ? { sizes } : {}),
   }
 }
 
@@ -69,7 +74,7 @@ export async function GET(request: NextRequest) {
 export async function POST(request: NextRequest) {
   try {
     const body = await request.json()
-    const { restaurantId, name, description, price, category, image, isAvailable, customizations } = body
+    const { restaurantId, name, description, price, category, image, isAvailable, customizations, sizes } = body
     if (!restaurantId || !name || price == null) {
       return NextResponse.json({ error: 'restaurantId, name, and price are required' }, { status: 400 })
     }
@@ -85,6 +90,9 @@ export async function POST(request: NextRequest) {
     }
     if (customizations != null && Array.isArray(customizations) && customizations.length > 0) {
       payload.customizations = customizations
+    }
+    if (sizes != null && Array.isArray(sizes) && sizes.length > 0) {
+      payload.sizes = sizes
     }
     const { data, error } = await supabase
       .from('menu_items')

@@ -20,27 +20,42 @@ const stripePromise = stripePublishableKey ? loadStripe(stripePublishableKey) : 
 
 const CUSTOMER_PROFILE_KEY = 'restaurant-customer-profile'
 
-function loadCustomerProfile(): { name: string; email: string; phone: string } {
-  if (typeof window === 'undefined') return { name: '', email: '', phone: '' }
+type CustomerProfile = { firstName: string; lastName: string; email: string; phone: string }
+
+function loadCustomerProfile(): CustomerProfile {
+  if (typeof window === 'undefined') return { firstName: '', lastName: '', email: '', phone: '' }
   try {
     const raw = localStorage.getItem(CUSTOMER_PROFILE_KEY)
-    if (!raw) return { name: '', email: '', phone: '' }
-    const p = JSON.parse(raw) as { name?: string; email?: string; phone?: string }
+    if (!raw) return { firstName: '', lastName: '', email: '', phone: '' }
+    const p = JSON.parse(raw) as { firstName?: string; lastName?: string; name?: string; email?: string; phone?: string }
+    if (typeof p.firstName === 'string' && typeof p.lastName === 'string') {
+      return {
+        firstName: p.firstName,
+        lastName: p.lastName,
+        email: typeof p.email === 'string' ? p.email : '',
+        phone: typeof p.phone === 'string' ? p.phone : ''
+      }
+    }
+    // Backward compatibility: split legacy "name" into first/last
+    const name = typeof p.name === 'string' ? p.name.trim() : ''
+    const [firstName, ...rest] = name ? name.split(/\s+/) : []
     return {
-      name: typeof p.name === 'string' ? p.name : '',
+      firstName: firstName ?? '',
+      lastName: rest.length ? rest.join(' ') : '',
       email: typeof p.email === 'string' ? p.email : '',
       phone: typeof p.phone === 'string' ? p.phone : ''
     }
   } catch {
-    return { name: '', email: '', phone: '' }
+    return { firstName: '', lastName: '', email: '', phone: '' }
   }
 }
 
-function saveCustomerProfile(profile: { name: string; email: string; phone: string }) {
+function saveCustomerProfile(profile: CustomerProfile) {
   if (typeof window === 'undefined') return
   try {
     localStorage.setItem(CUSTOMER_PROFILE_KEY, JSON.stringify({
-      name: profile.name.trim(),
+      firstName: profile.firstName.trim(),
+      lastName: profile.lastName.trim(),
       email: profile.email.trim(),
       phone: profile.phone.trim()
     }))
@@ -129,9 +144,10 @@ export function Checkout() {
     if (cartTable) setTableNumber(cartTable)
   }, [cartTable])
 
-  // Form State – pre-fill name, email, phone from cached customer profile (client-only)
+  // Form State – pre-fill from cached customer profile (client-only)
   const [formData, setFormData] = useState({
-    name: '',
+    firstName: '',
+    lastName: '',
     email: '',
     phone: '',
     cardNumber: '',
@@ -141,10 +157,11 @@ export function Checkout() {
 
   useEffect(() => {
     const profile = loadCustomerProfile()
-    if (profile.name || profile.email || profile.phone) {
+    if (profile.firstName || profile.lastName || profile.email || profile.phone) {
       setFormData((prev) => ({
         ...prev,
-        name: profile.name,
+        firstName: profile.firstName,
+        lastName: profile.lastName,
         email: profile.email,
         phone: profile.phone
       }))
@@ -185,14 +202,20 @@ export function Checkout() {
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({
         restaurantId: items[0]?.restaurantId || '',
-        customerName: formData.name,
+        customerName: [formData.firstName.trim(), formData.lastName.trim()].filter(Boolean).join(' '),
         customerEmail: formData.email,
         customerPhone: formData.phone,
         items: items.map((item) => ({
           menuItemId: item.id,
           name: item.name,
           quantity: item.quantity,
-          price: item.price
+          price: item.price ?? 0,
+          ...(item.selectedRemoves?.length ? { selectedRemoves: item.selectedRemoves } : {}),
+          ...(item.selectedExtras?.length
+            ? { selectedExtras: item.selectedExtras.map((e) => ({ name: e.name, price: e.price })) }
+            : {}),
+          ...(item.spiceLevel ? { spiceLevel: item.spiceLevel } : {}),
+          ...(item.specialRequest ? { specialRequest: item.specialRequest } : {})
         })),
         total: finalTotal,
         status: 'pending',
@@ -211,8 +234,8 @@ export function Checkout() {
 
   const handleSubmit = async (e: React.FormEvent) => {
     e.preventDefault()
-    if (!formData.name.trim() || !formData.email.trim() || !formData.phone.trim()) {
-      error('Missing details', 'Please enter your name, email and phone number.')
+    if (!formData.firstName.trim() || !formData.lastName.trim() || !formData.email.trim() || !formData.phone.trim()) {
+      error('Missing details', 'Please enter your first name, last name, email and phone number.')
       return
     }
 
@@ -224,7 +247,7 @@ export function Checkout() {
       setIsProcessing(true)
       try {
         const orderData = await createOrderInSupabase({ paymentStatus: 'pending' })
-        saveCustomerProfile({ name: formData.name, email: formData.email, phone: formData.phone })
+        saveCustomerProfile({ firstName: formData.firstName, lastName: formData.lastName, email: formData.email, phone: formData.phone })
         const amountInCents = Math.round(finalTotal * 100)
         const res = await fetch('/api/stripe/create-payment-intent', {
           method: 'POST',
@@ -251,7 +274,7 @@ export function Checkout() {
       setIsProcessing(true)
       try {
         const orderData = await createOrderInSupabase({ paymentStatus: 'pending' })
-        saveCustomerProfile({ name: formData.name, email: formData.email, phone: formData.phone })
+        saveCustomerProfile({ firstName: formData.firstName, lastName: formData.lastName, email: formData.email, phone: formData.phone })
         clearCart()
         success('Order placed', `Order #${orderData.orderId} confirmed. Pay when you collect.`, {
           actionHref: `/confirmation?orderId=${orderData.orderId}&orderType=${orderType}`,
@@ -312,14 +335,24 @@ export function Checkout() {
               header={<h2 className="text-lg font-semibold">Contact Information</h2>}
             >
               <div className="space-y-4">
-                <Input
-                  label="Full Name"
-                  name="name"
-                  value={formData.name}
-                  onChange={handleInputChange}
-                  required
-                  placeholder="John Doe"
-                />
+                <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
+                  <Input
+                    label="First Name"
+                    name="firstName"
+                    value={formData.firstName}
+                    onChange={handleInputChange}
+                    required
+                    placeholder="John"
+                  />
+                  <Input
+                    label="Last Name"
+                    name="lastName"
+                    value={formData.lastName}
+                    onChange={handleInputChange}
+                    required
+                    placeholder="Doe"
+                  />
+                </div>
                 <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
                   <Input
                     label="Email"
@@ -493,12 +526,20 @@ export function Checkout() {
               <div className="mb-4 pb-4 border-b border-gray-200">
                 <h3 className="text-sm font-medium text-gray-700 mb-2">Items (incl. GST)</h3>
                 <ul className="space-y-1">
-                  {items.map((item) => (
-                    <li key={item.id} className="flex justify-between text-sm text-gray-600">
-                      <span>{item.quantity}x {item.name}</span>
-                      <span>A${(priceInclGst(item.price) * item.quantity).toFixed(2)}</span>
-                    </li>
-                  ))}
+                  {items.map((item, idx) => {
+                    const opts: string[] = []
+                    if (item.selectedRemoves?.length) opts.push(`Remove: ${item.selectedRemoves.join(', ')}`)
+                    if (item.selectedExtras?.length) opts.push(item.selectedExtras.map((e) => e.name).join(', '))
+                    if (item.spiceLevel) opts.push(`Spice: ${item.spiceLevel}`)
+                    if (item.specialRequest) opts.push(item.specialRequest)
+                    const optText = opts.length ? ` — ${opts.join('; ')}` : ''
+                    return (
+                      <li key={`${item.id}-${item.selectedSize ?? ''}-${idx}`} className="flex justify-between text-sm text-gray-600">
+                        <span>{item.quantity}x {item.name}{item.selectedSize ? ` (${item.selectedSize})` : ''}{optText}</span>
+                        <span>A${(priceInclGst(item.price ?? 0) * item.quantity).toFixed(2)}</span>
+                      </li>
+                    )
+                  })}
                 </ul>
               </div>
               <div className="space-y-2 mb-4">

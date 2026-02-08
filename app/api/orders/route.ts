@@ -101,14 +101,39 @@ export async function POST(request: NextRequest) {
       throw orderError
     }
 
-    // Insert order items (validate shape and types)
-    const rows = orderItems.map((item: { menuItemId?: string; name?: string; quantity?: number; price?: number }) => ({
-      order_id: order.id,
-      menu_item_id: item.menuItemId ?? '',
-      name: String(item.name ?? '').trim() || 'Item',
-      quantity: Math.max(1, Math.floor(Number(item.quantity) || 1)),
-      price: Number(item.price) || 0
-    }))
+    // Insert order items (validate shape and types); include per-item options when provided
+    type ItemInput = {
+      menuItemId?: string
+      name?: string
+      quantity?: number
+      price?: number
+      selectedRemoves?: string[]
+      selectedExtras?: { name: string; price: number }[]
+      spiceLevel?: string
+      specialRequest?: string
+    }
+    const rows = orderItems.map((item: ItemInput) => {
+      const options =
+        item.selectedRemoves?.length ||
+        item.selectedExtras?.length ||
+        item.spiceLevel ||
+        item.specialRequest
+          ? {
+              selectedRemoves: item.selectedRemoves ?? [],
+              selectedExtras: (item.selectedExtras ?? []).map((e) => ({ name: e.name, price: Number(e.price) || 0 })),
+              spiceLevel: item.spiceLevel ?? null,
+              specialRequest: item.specialRequest ?? null
+            }
+          : null
+      return {
+        order_id: order.id,
+        menu_item_id: item.menuItemId ?? '',
+        name: String(item.name ?? '').trim() || 'Item',
+        quantity: Math.max(1, Math.floor(Number(item.quantity) || 1)),
+        price: Number(item.price) || 0,
+        ...(options != null ? { options } : {})
+      }
+    })
 
     const { error: itemsError } = await supabase.from('order_items').insert(rows)
 

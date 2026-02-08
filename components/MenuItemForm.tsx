@@ -1,7 +1,7 @@
 'use client'
 
 import { useState, useMemo, useEffect } from 'react'
-import { MenuItem, MenuItemCustomizationOption } from '@/types'
+import { MenuItem, MenuItemCustomizationOption, MenuItemSize } from '@/types'
 import { Button } from './ui/Button'
 import { Input } from './ui/Input'
 import { Textarea } from './ui/Textarea'
@@ -14,6 +14,8 @@ interface MenuItemFormProps {
   initialData?: Partial<MenuItem>
   /** When provided, category dropdown uses these options plus "New category...". Otherwise uses default list. */
   categoryOptions?: string[]
+  /** When false, hide delete (trash) buttons for remove options and extras. Used by POS so only Restaurant Dashboard can delete. */
+  allowDeleteOptions?: boolean
   onSubmit: (data: Partial<MenuItem>) => void
   onCancel: () => void
 }
@@ -31,8 +33,9 @@ function getRemoveOptionsAndExtrasFromCustomizations(customizations?: MenuItem['
 }
 
 const NEW_CATEGORY_VALUE = '__new__'
+const NO_CATEGORY_VALUE = '__none__'
 
-export function MenuItemForm({ initialData, categoryOptions, onSubmit, onCancel }: MenuItemFormProps) {
+export function MenuItemForm({ initialData, categoryOptions, allowDeleteOptions = true, onSubmit, onCancel }: MenuItemFormProps) {
   const { removeOptions: initRemove, extras: initExtras } = useMemo(
     () => getRemoveOptionsAndExtrasFromCustomizations(initialData?.customizations),
     [initialData?.customizations]
@@ -41,7 +44,7 @@ export function MenuItemForm({ initialData, categoryOptions, onSubmit, onCancel 
     const base = (categoryOptions && categoryOptions.length > 0)
       ? [...new Set(categoryOptions)]
       : DEFAULT_CATEGORIES
-    const current = (initialData?.category && initialData.category !== NEW_CATEGORY_VALUE) ? initialData.category : null
+    const current = (initialData?.category && initialData.category !== NEW_CATEGORY_VALUE && initialData.category !== NO_CATEGORY_VALUE) ? initialData.category : null
     if (current && !base.includes(current)) return [...base, current]
     return base
   }, [categoryOptions, initialData?.category])
@@ -52,7 +55,7 @@ export function MenuItemForm({ initialData, categoryOptions, onSubmit, onCancel 
           name: '',
           description: '',
           price: 0,
-          category: 'Mains',
+          category: NO_CATEGORY_VALUE,
           image: 'https://images.unsplash.com/photo-1546069901-ba9599a7e63c?w=800&q=80',
           isAvailable: true,
           newCategoryName: ''
@@ -62,11 +65,27 @@ export function MenuItemForm({ initialData, categoryOptions, onSubmit, onCancel 
   const [extras, setExtras] = useState<MenuItemCustomizationOption[]>(initExtras)
   const isNewCategory = formData.category === NEW_CATEGORY_VALUE
 
+  const defaultSizes = useMemo((): { small: number; medium: number; large: number } => {
+    const s = initialData?.sizes
+    if (Array.isArray(s) && s.length >= 3) {
+      const byName = (name: string) => (s as MenuItemSize[]).find((x) => x.name.toLowerCase() === name.toLowerCase())?.price ?? 0
+      return { small: byName('Small'), medium: byName('Medium'), large: byName('Large') }
+    }
+    const p = Number(initialData?.price ?? 0)
+    return { small: Math.max(0, p - 2), medium: p, large: p + 2 }
+  }, [initialData?.sizes, initialData?.price])
+  const [sizesEnabled, setSizesEnabled] = useState(Boolean(initialData?.sizes?.length))
+  const [sizePrices, setSizePrices] = useState(defaultSizes)
+
   useEffect(() => {
     const { removeOptions: r, extras: e } = getRemoveOptionsAndExtrasFromCustomizations(initialData?.customizations)
     setRemoveOptions(r)
     setExtras(e)
   }, [initialData?.customizations])
+  useEffect(() => {
+    setSizePrices(defaultSizes)
+    setSizesEnabled(Boolean(initialData?.sizes?.length))
+  }, [initialData?.sizes, initialData?.price])
 
   const handleSubmit = (e: React.FormEvent) => {
     e.preventDefault()
@@ -88,9 +107,17 @@ export function MenuItemForm({ initialData, categoryOptions, onSubmit, onCancel 
         options: extras.filter((o) => (o.name ?? '').trim()).map((o, i) => ({ id: o.id || `ext_${i}`, name: o.name.trim(), price: Number(o.price) || 0 }))
       })
     }
+    const sizes: MenuItemSize[] | undefined = sizesEnabled
+      ? [
+          { name: 'Small', price: Number(sizePrices.small) || 0 },
+          { name: 'Medium', price: Number(sizePrices.medium) || 0 },
+          { name: 'Large', price: Number(sizePrices.large) || 0 }
+        ]
+      : undefined
+    const effectivePrice = sizesEnabled ? Number(sizePrices.medium) || 0 : formData.price ?? 0
     // eslint-disable-next-line @typescript-eslint/no-unused-vars -- newCategoryName intentionally omitted from submit
     const { newCategoryName: _n, ...rest } = formData
-    onSubmit({ ...rest, category, customizations: customizations.length > 0 ? customizations : undefined })
+    onSubmit({ ...rest, price: effectivePrice, category, customizations: customizations.length > 0 ? customizations : undefined, sizes })
   }
 
   return (
@@ -134,7 +161,7 @@ export function MenuItemForm({ initialData, categoryOptions, onSubmit, onCancel 
         />
         <Select
           label="Category"
-          value={formData.category ?? (options[0] || 'Mains')}
+          value={formData.category ?? NO_CATEGORY_VALUE}
           onChange={(e) =>
             setFormData({
               ...formData,
@@ -142,6 +169,7 @@ export function MenuItemForm({ initialData, categoryOptions, onSubmit, onCancel 
             })
           }
           options={[
+            { value: NO_CATEGORY_VALUE, label: 'No category' },
             ...options.map((c) => ({ value: c, label: c })),
             { value: NEW_CATEGORY_VALUE, label: '➕ New category...' }
           ]}
@@ -155,6 +183,47 @@ export function MenuItemForm({ initialData, categoryOptions, onSubmit, onCancel 
           />
         )}
       </div>
+
+      <div>
+        <label className="flex items-center gap-2 cursor-pointer mb-2">
+          <input
+            type="checkbox"
+            checked={sizesEnabled}
+            onChange={(e) => setSizesEnabled(e.target.checked)}
+            className="rounded border-gray-300 text-orange-600 focus:ring-orange-500"
+          />
+          <span className="text-sm font-medium text-gray-700">Offer sizes (Small, Medium, Large) with separate prices</span>
+        </label>
+        {sizesEnabled && (
+          <div className="grid grid-cols-3 gap-3 mt-2">
+            <Input
+              label="Small (A$)"
+              type="number"
+              step="0.01"
+              min="0"
+              value={sizePrices.small}
+              onChange={(e) => setSizePrices((p) => ({ ...p, small: parseFloat(e.target.value) || 0 }))}
+            />
+            <Input
+              label="Medium (A$)"
+              type="number"
+              step="0.01"
+              min="0"
+              value={sizePrices.medium}
+              onChange={(e) => setSizePrices((p) => ({ ...p, medium: parseFloat(e.target.value) || 0 }))}
+            />
+            <Input
+              label="Large (A$)"
+              type="number"
+              step="0.01"
+              min="0"
+              value={sizePrices.large}
+              onChange={(e) => setSizePrices((p) => ({ ...p, large: parseFloat(e.target.value) || 0 }))}
+            />
+          </div>
+        )}
+      </div>
+
       <Input
         label="Image URL"
         value={formData.image}
@@ -182,23 +251,27 @@ export function MenuItemForm({ initialData, categoryOptions, onSubmit, onCancel 
               placeholder="e.g. No onion"
               className="flex-1"
             />
-            <button
-              type="button"
-              onClick={() => setRemoveOptions(removeOptions.filter((_, i) => i !== idx))}
-              className="p-2 rounded-lg border border-red-200 text-red-600 hover:bg-red-50"
-              aria-label="Remove option"
-            >
-              <Trash2 className="w-4 h-4" />
-            </button>
+            {allowDeleteOptions && (
+              <button
+                type="button"
+                onClick={() => setRemoveOptions(removeOptions.filter((_, i) => i !== idx))}
+                className="p-2 rounded-lg border border-red-200 text-red-600 hover:bg-red-50"
+                aria-label="Remove option"
+              >
+                <Trash2 className="w-4 h-4" />
+              </button>
+            )}
           </div>
         ))}
-        <button
-          type="button"
-          onClick={() => setRemoveOptions([...removeOptions, { id: `rem_${Date.now()}`, name: '', price: 0 }])}
-          className="text-sm text-orange-600 font-medium hover:underline"
-        >
-          + Add remove option
-        </button>
+        {allowDeleteOptions && (
+          <button
+            type="button"
+            onClick={() => setRemoveOptions([...removeOptions, { id: `rem_${Date.now()}`, name: '', price: 0 }])}
+            className="text-sm text-orange-600 font-medium hover:underline"
+          >
+            + Add remove option
+          </button>
+        )}
       </div>
 
       <div>
@@ -229,14 +302,16 @@ export function MenuItemForm({ initialData, categoryOptions, onSubmit, onCancel 
               className="w-20"
             />
             <span className="text-xs text-gray-500 w-6">A$</span>
-            <button
-              type="button"
-              onClick={() => setExtras(extras.filter((_, i) => i !== idx))}
-              className="p-2 rounded-lg border border-red-200 text-red-600 hover:bg-red-50"
-              aria-label="Remove extra"
-            >
-              <Trash2 className="w-4 h-4" />
-            </button>
+            {allowDeleteOptions && (
+              <button
+                type="button"
+                onClick={() => setExtras(extras.filter((_, i) => i !== idx))}
+                className="p-2 rounded-lg border border-red-200 text-red-600 hover:bg-red-50"
+                aria-label="Remove extra"
+              >
+                <Trash2 className="w-4 h-4" />
+              </button>
+            )}
           </div>
         ))}
         <button

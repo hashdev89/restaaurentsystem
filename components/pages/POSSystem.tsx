@@ -44,7 +44,8 @@ import { Tabs, TabsList, TabsTrigger } from '../ui/tabs'
 import { cn } from '@/lib/utils'
 import { GST_RATE, priceInclGst } from '@/lib/gst'
 import { normalizeOrders, type SupabaseOrderRow } from '@/lib/orders'
-import { OrderType, type Order } from '@/types'
+import { OrderType, type Order, type MenuItem } from '@/types'
+import { MenuItemForm } from '../MenuItemForm'
 
 // Types
 interface CustomizationOption {
@@ -78,6 +79,8 @@ interface POSSubItem {
   isAvailable: boolean
   popular?: boolean
   image: string
+  /** Small / Medium / Large with separate prices. When set, basePrice is fallback; selected size price is used when adding. */
+  sizes?: { name: string; price: number }[]
   /** Custom customization groups for this item (used when adding/editing items). If set, overrides getDefaultCustomizations by id prefix. */
   customizations?: CustomizationGroup[]
 }
@@ -101,6 +104,8 @@ interface CartItem {
   finalPrice: number // Price incl GST (basePrice + customizations) * 1.1
   gstAmount: number // GST amount per item (basePrice + customizations) * GST_RATE
   notes?: string
+  /** Display label when item was added with a size (e.g. Small, Medium, Large). */
+  selectedSize?: string
 }
 
 type PaymentMethod = 'card' | 'cash' | 'mix'
@@ -614,7 +619,7 @@ const getDefaultCustomizations = (itemId: string, item?: POSSubItem): Customizat
 }
 
 /** Map API menu items (from Restaurant Dashboard) to POS categories + subItems. */
-function buildCategoriesFromMenuItems(items: { id: string; name: string; description: string; price: number; category: string; image: string; isAvailable: boolean; customizations?: CustomizationGroup[] }[]): POSCategory[] {
+function buildCategoriesFromMenuItems(items: { id: string; name: string; description: string; price: number; category: string; image: string; isAvailable: boolean; customizations?: CustomizationGroup[]; sizes?: { name: string; price: number }[] }[]): POSCategory[] {
   const byCategory = new Map<string, typeof items>()
   for (const item of items) {
     const cat = item.category?.trim() || 'Other'
@@ -636,6 +641,7 @@ function buildCategoriesFromMenuItems(items: { id: string; name: string; descrip
       image: i.image ?? '',
       isAvailable: i.isAvailable !== false,
       popular: false,
+      sizes: i.sizes && i.sizes.length > 0 ? i.sizes : undefined,
       customizations: i.customizations && i.customizations.length > 0 ? i.customizations : undefined,
     })),
   }))
@@ -658,6 +664,8 @@ export function POSSystem({ restaurantId: restaurantIdProp }: { restaurantId?: s
   const [showDiscountModal, setShowDiscountModal] = useState(false)
   const [showClearConfirm, setShowClearConfirm] = useState(false)
   const [selectedCustomizations, setSelectedCustomizations] = useState<Record<string, string[]>>({})
+  /** Per-item selected size (Small/Medium/Large) for items that have sizes; used when adding to cart. */
+  const [selectedSizeByItemId, setSelectedSizeByItemId] = useState<Record<string, { name: string; price: number }>>({})
   const [paymentMethod, setPaymentMethod] = useState<PaymentMethod>('card')
   /** Cash received from customer (for change calculation when payment method is cash) */
   const [cashTendered, setCashTendered] = useState('')
@@ -911,18 +919,21 @@ export function POSSystem({ restaurantId: restaurantIdProp }: { restaurantId?: s
   )
 
   // Quick add to cart (no customization) - increments quantity if item exists
-  const quickAddToCart = useCallback((item: POSSubItem) => {
+  const quickAddToCart = useCallback((item: POSSubItem, selectedSize?: { name: string; price: number }) => {
     const category = categories.find(cat => 
       cat.subItems.some(subItem => subItem.id === item.id)
     )
+    const priceExGst = selectedSize ? selectedSize.price : item.basePrice
+    const selectedSizeName = selectedSize?.name
 
     setCart((prev) => {
-      // Check if exact same item (same base item, no customizations) already exists
+      // Check if exact same item (same base item, same size, no customizations) already exists
       const existingItem = prev.find(
         cartItem => 
           cartItem.name === item.name && 
-          cartItem.basePrice === item.basePrice &&
-          cartItem.customizations.length === 0
+          cartItem.basePrice === priceExGst &&
+          cartItem.customizations.length === 0 &&
+          (cartItem.selectedSize ?? '') === (selectedSizeName ?? '')
       )
 
       if (existingItem) {
@@ -935,8 +946,6 @@ export function POSSystem({ restaurantId: restaurantIdProp }: { restaurantId?: s
       }
 
       // Add new item
-      // basePrice is ex GST, calculate GST and price incl GST
-      const priceExGst = item.basePrice
       const gstAmount = priceExGst * GST_RATE
       const priceInclGst = priceExGst + gstAmount
 
@@ -944,12 +953,13 @@ export function POSSystem({ restaurantId: restaurantIdProp }: { restaurantId?: s
         id: `${item.id}-${Date.now()}`,
         name: item.name,
         description: item.description,
-        basePrice: item.basePrice, // ex GST
+        basePrice: priceExGst, // ex GST (size price when applicable)
         quantity: 1,
         categoryName: category?.name || 'Other',
         customizations: [],
         finalPrice: priceInclGst, // incl GST
-        gstAmount: gstAmount
+        gstAmount: gstAmount,
+        ...(selectedSizeName ? { selectedSize: selectedSizeName } : {}),
       }
 
       return [...prev, cartItem]
@@ -969,9 +979,9 @@ export function POSSystem({ restaurantId: restaurantIdProp }: { restaurantId?: s
     e.preventDefault()
     e.stopPropagation()
     
-    // Direct add to cart (increments quantity if exists)
-    quickAddToCart(item)
-  }, [quickAddToCart])
+    const selectedSize = item.sizes?.length ? (selectedSizeByItemId[item.id] ?? item.sizes[0]) : undefined
+    quickAddToCart(item, selectedSize)
+  }, [quickAddToCart, selectedSizeByItemId])
 
   // Handle customize button click
   const handleCustomizeClick = useCallback((item: POSSubItem, e: React.MouseEvent) => {
@@ -1148,8 +1158,10 @@ export function POSSystem({ restaurantId: restaurantIdProp }: { restaurantId?: s
     })
 
     const customizationPrice = calculateCustomizationPrice()
-    // basePrice and customizations are ex GST
-    const priceExGst = selectedItem.basePrice + customizationPrice
+    // Base price: use selected size when item has sizes, else basePrice
+    const selectedSize = selectedItem.sizes?.length ? (selectedSizeByItemId[selectedItem.id] ?? selectedItem.sizes[0]) : undefined
+    const basePriceExGst = selectedSize ? selectedSize.price : selectedItem.basePrice
+    const priceExGst = basePriceExGst + customizationPrice
     const gstAmount = priceExGst * GST_RATE
     const priceInclGst = priceExGst + gstAmount
 
@@ -1157,12 +1169,13 @@ export function POSSystem({ restaurantId: restaurantIdProp }: { restaurantId?: s
       id: `${selectedItem.id}-${Date.now()}`,
       name: selectedItem.name,
       description: selectedItem.description,
-      basePrice: selectedItem.basePrice, // ex GST
+      basePrice: basePriceExGst, // ex GST (size price when applicable)
       quantity: 1,
       categoryName: category?.name || 'Other',
       customizations: finalCustomizations,
       finalPrice: priceInclGst, // incl GST
-      gstAmount: gstAmount
+      gstAmount: gstAmount,
+      ...(selectedSize ? { selectedSize: selectedSize.name } : {}),
     }
 
     setCart((prev) => [...prev, cartItem])
@@ -1702,7 +1715,10 @@ export function POSSystem({ restaurantId: restaurantIdProp }: { restaurantId?: s
   }, [showCustomizationModal, showPaymentModal, showDiscountModal, showClearConfirm, showItemModal, cart])
 
   const customizationPrice = selectedItem ? calculateCustomizationPrice() : 0
-  const itemPriceExGst = selectedItem ? selectedItem.basePrice + customizationPrice : 0
+  const selectedItemBasePrice = selectedItem && selectedItem.sizes?.length
+    ? (selectedSizeByItemId[selectedItem.id] ?? selectedItem.sizes[0]).price
+    : selectedItem?.basePrice ?? 0
+  const itemPriceExGst = selectedItem ? selectedItemBasePrice + customizationPrice : 0
   const itemGstAmount = itemPriceExGst * GST_RATE
   const itemFinalPrice = itemPriceExGst + itemGstAmount
 
@@ -1724,14 +1740,27 @@ export function POSSystem({ restaurantId: restaurantIdProp }: { restaurantId?: s
   const handleEditItem = (item: POSSubItem) => {
     setEditingItem(item)
     const categoryId = categories.find((c) => c.subItems.some((s) => s.id === item.id))?.id ?? categories[0]?.id ?? ''
+    const removeOptions: CustomizationOption[] = []
+    const extras: CustomizationOption[] = []
+    if (item.customizations?.length) {
+      for (const g of item.customizations) {
+        if (g.type === 'remove' || g.id === 'remove_options') {
+          removeOptions.push(...(g.options || []).map((o) => ({ id: o.id, name: o.name, price: 0 })))
+        } else if (g.type === 'extra' || g.id === 'extras') {
+          extras.push(...(g.options || []).map((o) => ({ id: o.id, name: o.name, price: Number(o.price) || 0 })))
+        }
+      }
+    }
     setItemFormData({
       ...item,
       categoryId,
+      removeOptions: removeOptions.length > 0 ? removeOptions : undefined,
+      extras: extras.length > 0 ? extras : undefined,
     })
     setShowItemModal(true)
   }
 
-  const handleSaveItem = async (data: Partial<POSSubItem> & { categoryId?: string; newCategoryName?: string; removeOptions?: CustomizationOption[]; extras?: CustomizationOption[] }) => {
+  const handleSaveItem = async (data: Partial<POSSubItem> & { categoryId?: string; newCategoryName?: string; removeOptions?: CustomizationOption[]; extras?: CustomizationOption[]; sizes?: { name: string; price: number }[] }) => {
     const categoryId = data.categoryId ?? categories[0]?.id ?? ''
     const name = (data.name ?? '').trim()
     const description = (data.description ?? '').trim()
@@ -1741,6 +1770,7 @@ export function POSSystem({ restaurantId: restaurantIdProp }: { restaurantId?: s
     const popular = data.popular === true
     const removeOptions = (data.removeOptions ?? []).filter((o) => (o.name ?? '').trim())
     const extras = (data.extras ?? []).filter((o) => (o.name ?? '').trim())
+    const sizes = data.sizes && Array.isArray(data.sizes) ? data.sizes.filter((s) => s && typeof s.name === 'string') : undefined
     const customizations: CustomizationGroup[] = []
     if (removeOptions.length > 0) {
       customizations.push({ id: 'remove_options', name: 'Remove options', type: 'remove', options: removeOptions.map((o, i) => ({ id: o.id || `rem_${i}`, name: o.name.trim(), price: 0 })) })
@@ -1766,7 +1796,8 @@ export function POSSystem({ restaurantId: restaurantIdProp }: { restaurantId?: s
               category: categories.find((c) => c.subItems.some((s) => s.id === editingItem.id))?.name ?? 'Other',
               image,
               isAvailable,
-              customizations: customizations.length > 0 ? customizations : undefined,
+              customizations,
+              sizes: sizes?.length ? sizes : undefined,
             }),
           })
           if (!res.ok) throw new Error('Update failed')
@@ -1783,7 +1814,7 @@ export function POSSystem({ restaurantId: restaurantIdProp }: { restaurantId?: s
               category: isNewCategory ? newCatName : (categories.find((c) => c.id === categoryId)?.name ?? 'Other'),
               image,
               isAvailable,
-              customizations: customizations.length > 0 ? customizations : undefined,
+              customizations,
             }),
           })
           if (!res.ok) throw new Error('Create failed')
@@ -1806,7 +1837,7 @@ export function POSSystem({ restaurantId: restaurantIdProp }: { restaurantId?: s
           ...cat,
           subItems: cat.subItems.map((s) =>
             s.id === editingItem.id
-              ? { ...s, name, description, basePrice, image, isAvailable, popular, customizations: customizations.length > 0 ? customizations : undefined }
+              ? { ...s, name, description, basePrice, image, isAvailable, popular, customizations: customizations.length > 0 ? customizations : undefined, sizes }
               : s
           ),
         }))
@@ -1822,6 +1853,7 @@ export function POSSystem({ restaurantId: restaurantIdProp }: { restaurantId?: s
         isAvailable,
         popular,
         customizations: customizations.length > 0 ? customizations : undefined,
+        sizes,
       }
       setCategories((prev) => [
         ...prev,
@@ -1837,6 +1869,7 @@ export function POSSystem({ restaurantId: restaurantIdProp }: { restaurantId?: s
         isAvailable,
         popular,
         customizations: customizations.length > 0 ? customizations : undefined,
+        sizes,
       }
       setCategories((prev) =>
         prev.map((cat) =>
@@ -1890,17 +1923,33 @@ export function POSSystem({ restaurantId: restaurantIdProp }: { restaurantId?: s
         else setPosPinError('Wrong PIN')
       }
       return (
-        <div className="fixed inset-0 flex items-center justify-center bg-gray-100 p-4">
-          <Card className="p-8 max-w-md">
-            <h2 className="text-xl font-semibold text-gray-900 mb-2">POS access</h2>
-            <p className="text-sm text-gray-500 mb-4">Enter 4-digit PIN</p>
-            <form onSubmit={handlePosPinSubmit} className="space-y-3">
-              <input type="password" inputMode="numeric" maxLength={4} value={posPinInput} onChange={(e) => { setPosPinInput(e.target.value.replace(/\D/g, '').slice(0, 4)); setPosPinError('') }} placeholder="••••" className="w-full rounded-md border border-gray-300 px-4 py-3 text-center text-2xl tracking-widest" autoComplete="off" />
-              {posPinError && <p className="text-sm text-red-600">{posPinError}</p>}
-              <Button type="submit" className="w-full">Unlock POS</Button>
-            </form>
-          </Card>
-        </div>
+        <POSKeyboardProvider>
+          <div className="fixed inset-0 flex items-center justify-center bg-gray-100 p-4">
+            <Card className="p-8 max-w-md">
+              <h2 className="text-xl font-semibold text-gray-900 mb-2">POS access</h2>
+              <p className="text-sm text-gray-500 mb-4">Enter 4-digit PIN</p>
+              <form onSubmit={handlePosPinSubmit} className="space-y-3">
+                <POSInput
+                  type="password"
+                  inputMode="numeric"
+                  maxLength={4}
+                  value={posPinInput}
+                  onChange={(e) => {
+                    const v = e.target.value.replace(/\D/g, '').slice(0, 4)
+                    setPosPinInput(v)
+                    setPosPinError('')
+                  }}
+                  placeholder="••••"
+                  keyboardType="number"
+                  className="w-full rounded-md border border-gray-300 px-4 py-3 text-center text-2xl tracking-widest"
+                  autoComplete="off"
+                />
+                {posPinError && <p className="text-sm text-red-600">{posPinError}</p>}
+                <Button type="submit" className="w-full">Unlock POS</Button>
+              </form>
+            </Card>
+          </div>
+        </POSKeyboardProvider>
       )
     }
   }
@@ -2072,9 +2121,34 @@ export function POSSystem({ restaurantId: restaurantIdProp }: { restaurantId?: s
                         <h3 className="font-bold text-gray-900 text-base mb-1 group-hover:text-orange-600 line-clamp-1">
                           {item.name}
                         </h3>
-                        <p className="text-xs text-gray-500 mb-2 line-clamp-2">{item.description}</p>
-                        <p className="text-xl font-bold text-orange-600 mb-1">A${(item.basePrice * (1 + GST_RATE)).toFixed(2)}</p>
-                        <p className="text-xs text-gray-500 mb-2">incl. GST</p>
+                        <p className="text-xs text-gray-500 mb-1 line-clamp-2">{item.description}</p>
+                        {(item.sizes?.length > 0 || (item.customizations && item.customizations.length > 0)) && (
+                          <p className="text-[10px] sm:text-xs text-gray-400 mb-2 flex flex-wrap items-center gap-x-1.5 gap-y-0.5">
+                            {item.sizes && item.sizes.length > 0 && (
+                              <span>
+                                {item.sizes.map((s) => s.name === 'Small' ? 'sm' : s.name === 'Medium' ? 'md' : s.name === 'Large' ? 'lg' : s.name.toLowerCase()).join(' · ')}
+                              </span>
+                            )}
+                            {item.sizes?.length > 0 && item.customizations && item.customizations.length > 0 && <span className="text-gray-300">·</span>}
+                            {item.customizations && item.customizations.length > 0 && (
+                              <span className="text-red-500 font-normal">options</span>
+                            )}
+                          </p>
+                        )}
+                        {(!item.sizes?.length && (!item.customizations || item.customizations.length === 0)) && <div className="mb-2" />}
+                        {item.sizes && item.sizes.length > 0 ? (
+                          <>
+                            <p className="text-xl font-bold text-orange-600 mb-1">
+                              A${(Math.min(...item.sizes.map(s => s.price)) * (1 + GST_RATE)).toFixed(2)}
+                            </p>
+                            <p className="text-xs text-gray-500 mb-2">incl. GST</p>
+                          </>
+                        ) : (
+                          <>
+                            <p className="text-xl font-bold text-orange-600 mb-1">A${(item.basePrice * (1 + GST_RATE)).toFixed(2)}</p>
+                            <p className="text-xs text-gray-500 mb-2">incl. GST</p>
+                          </>
+                        )}
                       </div>
                     </div>
                     <button
@@ -2082,7 +2156,7 @@ export function POSSystem({ restaurantId: restaurantIdProp }: { restaurantId?: s
                       className="customize-button w-full bg-gradient-to-r from-orange-500 to-orange-600 text-white font-extrabold py-5 px-4 transition-all text-lg hover:from-orange-600 hover:to-orange-700 active:scale-95 shadow-2xl border-t-4 border-orange-400 mt-auto flex items-center justify-center gap-2 uppercase tracking-wide"
                     >
                       <Plus className="w-6 h-6" />
-                      Customize & Add
+                      Customize
                     </button>
                   </div>
               ))}
@@ -2159,7 +2233,7 @@ export function POSSystem({ restaurantId: restaurantIdProp }: { restaurantId?: s
                     {/* Inline: name, quantity, price, remove */}
                     <div className="flex items-center gap-2 flex-wrap">
                       <p className="font-semibold text-gray-900 text-sm min-w-0 flex-1 truncate" title={item.name}>
-                        {item.name}
+                        {item.name}{item.selectedSize ? ` (${item.selectedSize})` : ''}
                       </p>
                       <div className="flex items-center gap-1 flex-shrink-0">
                         <button
@@ -2210,32 +2284,41 @@ export function POSSystem({ restaurantId: restaurantIdProp }: { restaurantId?: s
           </>
         )}
 
-        {/* Orders Section - Pending orders from customers (Restaurant Dashboard / KDS) + POS order history */}
+        {/* Orders Section - 2 columns: Online orders | POS / In-house orders */}
         {activeSection === 'orders' && (
-          <div className="w-full flex flex-col bg-white overflow-hidden">
-            <div className="p-6 border-b border-gray-200">
-              <h2 className="text-2xl font-bold text-gray-900 mb-4">Orders</h2>
-              <div className="flex items-center gap-4">
+          <div className="w-full flex flex-col bg-white overflow-hidden min-h-0">
+            <div className="p-4 sm:p-6 border-b border-gray-200 flex-shrink-0">
+              <h2 className="text-xl sm:text-2xl font-bold text-gray-900 mb-3">Orders</h2>
+              <div className="flex flex-wrap items-center gap-3">
                 <POSInput
                   placeholder="Search orders..."
-                  className="flex-1"
+                  className="flex-1 min-w-[180px] max-w-md"
                   value={searchQuery}
                   onChange={(e) => setSearchQuery(e.target.value)}
                 />
-                <Badge variant="info">{pendingOrdersFromApi.length} pending</Badge>
+                <div className="flex items-center gap-2">
+                  <Badge variant="info">{pendingOrdersFromApi.length} online</Badge>
+                  <Badge variant="default">{orders.length} POS</Badge>
+                </div>
               </div>
             </div>
-            <div className="flex-1 overflow-y-auto p-6 space-y-6">
-              <div>
+            <div className="flex-1 min-h-0 grid grid-cols-1 lg:grid-cols-2 gap-4 sm:gap-6 p-4 sm:p-6 overflow-hidden">
+              {/* Left column: Online orders */}
+              <div className="flex flex-col min-h-0 bg-gray-50/50 rounded-xl border border-gray-200 overflow-hidden">
+                <div className="px-4 py-3 border-b border-gray-200 bg-white flex-shrink-0">
+                  <h3 className="text-base font-semibold text-gray-900">Online orders</h3>
+                  <p className="text-xs text-gray-500 mt-0.5">Placed online → accept in Dashboard, then bill here.</p>
+                </div>
+                <div className="flex-1 min-h-0 overflow-y-auto p-4">
                 {pendingOrdersLoading ? (
-                  <p className="text-gray-500">Loading…</p>
+                  <p className="text-gray-500 text-sm">Loading…</p>
                 ) : pendingOrdersFromApi.length === 0 ? (
-                  <div className="text-center py-8 bg-gray-50 rounded-xl border border-gray-200">
-                    <p className="text-gray-500 font-medium">No pending orders</p>
-                    <p className="text-sm text-gray-400 mt-1">Orders accepted in Restaurant Dashboard appear here and in KDS.</p>
+                  <div className="text-center py-8 bg-white rounded-lg border border-gray-200">
+                    <p className="text-gray-500 font-medium text-sm">No online orders</p>
+                    <p className="text-xs text-gray-400 mt-1">Orders accepted in Restaurant Dashboard appear here.</p>
                   </div>
                 ) : (
-                  <div className="space-y-4">
+                  <div className="space-y-3">
                     {/* Sort: ready first (ready for billing), then preparing, accepted, pending */}
                     {[...pendingOrdersFromApi]
                       .sort((a, b) => {
@@ -2246,14 +2329,14 @@ export function POSSystem({ restaurantId: restaurantIdProp }: { restaurantId?: s
                       <div
                         key={order.id}
                         className={cn(
-                          'bg-white border-2 rounded-xl p-6 shadow-sm',
+                          'bg-white border-2 rounded-lg p-4 shadow-sm',
                           order.status === 'ready' ? 'border-green-400 bg-green-50/50' : 'border-orange-200'
                         )}
                       >
-                        <div className="flex items-start justify-between mb-4">
-                          <div>
-                            <div className="flex items-center gap-3 mb-2 flex-wrap">
-                              <h3 className="text-lg font-bold text-gray-900">Order #{order.id.slice(-8)}</h3>
+                        <div className="flex items-start justify-between gap-3 mb-3">
+                          <div className="min-w-0 flex-1">
+                            <div className="flex items-center gap-2 mb-1 flex-wrap">
+                              <h3 className="text-base font-bold text-gray-900">#{order.id.slice(-8)}</h3>
                               <Badge variant="info" className="capitalize">{order.orderType || 'dine-in'}</Badge>
                               {order.status === 'ready' && (
                                 <Badge variant="success">Ready for billing</Badge>
@@ -2262,28 +2345,23 @@ export function POSSystem({ restaurantId: restaurantIdProp }: { restaurantId?: s
                                 <Badge variant="warning" className="capitalize">{order.status}</Badge>
                               )}
                               {order.orderType === 'dine-in' && order.tableNumber && (
-                                <Badge variant="warning">Table {order.tableNumber}</Badge>
+                                <Badge variant="warning">T{order.tableNumber}</Badge>
                               )}
                             </div>
-                            <p className="text-sm text-gray-600">
-                              {new Date(order.createdAt).toLocaleString('en-AU')}
-                            </p>
-                            <p className="text-sm text-gray-600">Customer: {order.customerName || '—'}</p>
-                            {order.customerPhone && (
-                              <p className="text-sm text-gray-500">{order.customerPhone}</p>
-                            )}
+                            <p className="text-xs text-gray-500">{new Date(order.createdAt).toLocaleString('en-AU')}</p>
+                            <p className="text-xs text-gray-600 truncate" title={order.customerName || '—'}>{order.customerName || '—'}</p>
                             {order.specialRequests && (
-                              <p className="text-sm text-gray-600 mt-1 bg-amber-50 px-2 py-1 rounded">Seating: {order.specialRequests}</p>
+                              <p className="text-xs text-amber-800 bg-amber-50 mt-1 px-2 py-0.5 rounded">Seating: {order.specialRequests}</p>
                             )}
                           </div>
-                          <div className="text-right">
-                            <p className="text-2xl font-bold text-orange-600">A${Number(order.total).toFixed(2)}</p>
-                            <p className="text-xs text-gray-500 mt-1">{order.items.length} items</p>
+                          <div className="text-right flex-shrink-0">
+                            <p className="text-lg font-bold text-orange-600">A${Number(order.total).toFixed(2)}</p>
+                            <p className="text-xs text-gray-500">{order.items.length} items</p>
                             {!['completed', 'rejected'].includes(order.status) && (
                               <Button
                                 variant="primary"
                                 size="sm"
-                                className="mt-3 w-full sm:w-auto"
+                                className="mt-2 w-full"
                                 onClick={() => handleProceedToBilling(order.id)}
                               >
                                 Proceed to billing
@@ -2291,10 +2369,10 @@ export function POSSystem({ restaurantId: restaurantIdProp }: { restaurantId?: s
                             )}
                           </div>
                         </div>
-                        <div className="border-t border-gray-200 pt-4">
-                          <div className="space-y-2">
+                        <div className="border-t border-gray-100 pt-3 mt-2">
+                          <div className="space-y-1">
                             {order.items.map((item: { quantity: number; name: string; price: number; customizations?: { id: string; type?: string; options?: { name: string; price?: number }[] }[] }, idx: number) => (
-                              <div key={idx} className="text-sm">
+                              <div key={idx} className="text-xs">
                                 <div className="flex justify-between">
                                   <span className="text-gray-700">
                                     {item.quantity}x {item.name}
@@ -2324,39 +2402,49 @@ export function POSSystem({ restaurantId: restaurantIdProp }: { restaurantId?: s
                     ))}
                   </div>
                 )}
+                </div>
               </div>
 
-              {/* POS-created orders (completed in POS today) */}
-              {orders.length > 0 && (
-                <div>
-                  <h3 className="text-lg font-semibold text-gray-900 mb-3">Completed in POS today</h3>
-                  <div className="space-y-4">
+              {/* Right column: POS / In-house orders */}
+              <div className="flex flex-col min-h-0 bg-gray-50/50 rounded-xl border border-gray-200 overflow-hidden">
+                <div className="px-4 py-3 border-b border-gray-200 bg-white flex-shrink-0">
+                  <h3 className="text-base font-semibold text-gray-900">POS / In-house orders</h3>
+                  <p className="text-xs text-gray-500 mt-0.5">Orders taken and completed at the POS today.</p>
+                </div>
+                <div className="flex-1 min-h-0 overflow-y-auto p-4">
+                {orders.length === 0 ? (
+                  <div className="text-center py-8 bg-white rounded-lg border border-gray-200">
+                    <p className="text-gray-500 font-medium text-sm">No POS orders yet</p>
+                    <p className="text-xs text-gray-400 mt-1">Orders you complete in POS will appear here.</p>
+                  </div>
+                ) : (
+                  <div className="space-y-3">
                     {orders.map((order: { id: string; orderNumber?: number; createdAt?: string; tableNumber?: string; customerName?: string; paymentMethod?: string; total?: number; items?: { quantity: number; name: string; finalPrice: number }[]; status?: string }) => (
-                      <div key={order.id} className="bg-white border-2 border-gray-200 rounded-xl p-6 shadow-sm">
-                        <div className="flex items-start justify-between mb-4">
-                          <div>
-                            <div className="flex items-center gap-3 mb-2">
-                              <h3 className="text-lg font-bold text-gray-900">Order #{order.orderNumber ?? order.id.slice(-8)}</h3>
+                      <div key={order.id} className="bg-white border-2 border-gray-200 rounded-lg p-4 shadow-sm">
+                        <div className="flex items-start justify-between gap-3 mb-3">
+                          <div className="min-w-0 flex-1">
+                            <div className="flex items-center gap-2 mb-1">
+                              <h3 className="text-base font-bold text-gray-900">#{order.orderNumber ?? order.id.slice(-8)}</h3>
                               <Badge variant="success">{order.status ?? 'completed'}</Badge>
                             </div>
-                            <p className="text-sm text-gray-600">
+                            <p className="text-xs text-gray-500">
                               {order.createdAt ? new Date(order.createdAt).toLocaleString('en-AU') : '—'}
                             </p>
                             {order.tableNumber && (
-                              <p className="text-sm text-gray-600">Table: {order.tableNumber}</p>
+                              <p className="text-xs text-gray-600">Table {order.tableNumber}</p>
                             )}
-                            <p className="text-sm text-gray-600">Customer: {order.customerName || 'Walk-in'}</p>
-                            <p className="text-sm text-gray-600">Payment: {(order.paymentMethod as string)?.toUpperCase() || 'N/A'}</p>
+                            <p className="text-xs text-gray-600 truncate" title={order.customerName || 'Walk-in'}>{order.customerName || 'Walk-in'}</p>
+                            <p className="text-xs text-gray-500">{(order.paymentMethod as string)?.toUpperCase() || 'N/A'}</p>
                           </div>
-                          <div className="text-right">
-                            <p className="text-2xl font-bold text-orange-600">A${Number(order.total ?? 0).toFixed(2)}</p>
-                            <p className="text-xs text-gray-500 mt-1">{order.items?.length ?? 0} items</p>
+                          <div className="text-right flex-shrink-0">
+                            <p className="text-lg font-bold text-orange-600">A${Number(order.total ?? 0).toFixed(2)}</p>
+                            <p className="text-xs text-gray-500">{order.items?.length ?? 0} items</p>
                           </div>
                         </div>
-                        <div className="border-t border-gray-200 pt-4">
-                          <div className="space-y-2">
+                        <div className="border-t border-gray-100 pt-3 mt-2">
+                          <div className="space-y-1">
                             {(order.items ?? []).map((item: { quantity: number; name: string; finalPrice: number; customizations?: { groupName: string; optionNames: string[]; totalPrice: number }[] }, idx: number) => (
-                              <div key={idx} className="text-sm">
+                              <div key={idx} className="text-xs">
                                 <div className="flex justify-between">
                                   <span className="text-gray-700">
                                     {item.quantity}x {item.name}
@@ -2382,8 +2470,9 @@ export function POSSystem({ restaurantId: restaurantIdProp }: { restaurantId?: s
                       </div>
                     ))}
                   </div>
+                )}
                 </div>
-              )}
+              </div>
             </div>
           </div>
         )}
@@ -2819,10 +2908,43 @@ export function POSSystem({ restaurantId: restaurantIdProp }: { restaurantId?: s
                     <p className="text-sm text-gray-600">{selectedItem.description}</p>
                   </div>
                   <div className="text-right">
-                    <p className="text-sm text-gray-500">Base Price (incl GST)</p>
-                    <p className="text-lg font-bold text-orange-600">A${(selectedItem.basePrice * (1 + GST_RATE)).toFixed(2)}</p>
+                    <p className="text-sm text-gray-500">
+                      {selectedItem.sizes?.length ? 'Size / Base (incl GST)' : 'Base Price (incl GST)'}
+                    </p>
+                    <p className="text-lg font-bold text-orange-600">
+                      A${(selectedItemBasePrice * (1 + GST_RATE)).toFixed(2)}
+                      {selectedItem.sizes?.length && (selectedSizeByItemId[selectedItem.id] ?? selectedItem.sizes[0]) && (
+                        <span className="block text-sm font-normal text-gray-600">
+                          ({(selectedSizeByItemId[selectedItem.id] ?? selectedItem.sizes[0]).name})
+                        </span>
+                      )}
+                    </p>
                   </div>
                 </div>
+                {selectedItem.sizes && selectedItem.sizes.length > 0 && (
+                  <div className="mt-4 pt-4 border-t border-gray-200">
+                    <p className="text-sm font-medium text-gray-500 mb-2">Size (incl GST)</p>
+                    <div className="flex flex-wrap gap-2">
+                      {selectedItem.sizes.map((size) => {
+                        const selected = (selectedSizeByItemId[selectedItem.id] ?? selectedItem.sizes[0]).name === size.name
+                        return (
+                          <button
+                            key={size.name}
+                            type="button"
+                            onClick={() => setSelectedSizeByItemId((prev) => ({ ...prev, [selectedItem.id]: size }))}
+                            className={cn(
+                              'inline-flex items-center px-4 py-2.5 rounded-lg border-2 text-sm font-medium transition-colors',
+                              selected ? 'border-orange-500 bg-orange-50 text-orange-800' : 'border-gray-200 bg-white text-gray-700 hover:border-orange-200'
+                            )}
+                          >
+                            <span>{size.name}</span>
+                            <span className="ml-2 font-semibold">A${(size.price * (1 + GST_RATE)).toFixed(2)}</span>
+                          </button>
+                        )
+                      })}
+                    </div>
+                  </div>
+                )}
               </div>
 
               {(() => {
@@ -3248,201 +3370,59 @@ export function POSSystem({ restaurantId: restaurantIdProp }: { restaurantId?: s
         </DialogContent>
       </Dialog>
 
-      {/* Add / Edit Item Modal */}
+      {/* Add / Edit Item Modal - same form as Restaurant Dashboard; POS cannot delete options or items */}
       <Dialog open={showItemModal} onOpenChange={(open) => !open && closeItemModal()}>
         <DialogContent
           title={editingItem ? 'Edit Item' : 'Add Item'}
-          description={editingItem ? 'Update menu item details' : 'Add a new item to the POS menu'}
+          description={editingItem ? 'Update menu item details' : 'Add a new item to the POS menu. Delete options or items only in Restaurant Dashboard.'}
           onClose={closeItemModal}
           className="max-w-md max-h-[90vh] overflow-y-auto"
         >
-          <form
-            onSubmit={(e) => {
-              e.preventDefault()
-              if (!editingItem && itemFormData.categoryId === '__new__' && !(itemFormData.newCategoryName ?? '').trim()) {
-                return
+          <MenuItemForm
+            initialData={editingItem ? (() => {
+              const cat = categories.find((c) => c.subItems.some((s) => s.id === editingItem.id))
+              return {
+                id: editingItem.id,
+                name: editingItem.name,
+                description: editingItem.description,
+                price: editingItem.basePrice,
+                category: cat?.name ?? 'Other',
+                image: editingItem.image,
+                isAvailable: editingItem.isAvailable,
+                customizations: editingItem.customizations,
+                sizes: editingItem.sizes,
+              } as Partial<MenuItem>
+            })() : undefined}
+            categoryOptions={categories.map((c) => c.name)}
+            allowDeleteOptions={false}
+            onSubmit={(data) => {
+              let removeOptions: CustomizationOption[] = []
+              let extras: CustomizationOption[] = []
+              if (data.customizations?.length) {
+                for (const g of data.customizations) {
+                  if (g.type === 'remove') removeOptions = g.options.map((o) => ({ id: o.id, name: o.name, price: 0 }))
+                  if (g.type === 'extra') extras = g.options.map((o) => ({ id: o.id, name: o.name, price: o.price }))
+                }
               }
-              handleSaveItem(itemFormData)
+              const catName = (data.category ?? 'Other').trim()
+              const existingCat = categories.find((c) => c.name === catName)
+              const categoryId = existingCat ? existingCat.id : '__new__'
+              const newCategoryName = existingCat ? undefined : (catName || undefined)
+              handleSaveItem({
+                name: data.name,
+                description: data.description,
+                basePrice: Number(data.price) ?? 0,
+                image: data.image,
+                isAvailable: data.isAvailable,
+                categoryId,
+                newCategoryName,
+                removeOptions,
+                extras,
+                sizes: data.sizes,
+              })
             }}
-            className="space-y-4"
-          >
-            <div>
-              <label className="block text-sm font-medium text-gray-700 mb-1">Name *</label>
-              <POSInput
-                value={itemFormData.name ?? ''}
-                onChange={(e) => setItemFormData((f) => ({ ...f, name: e.target.value }))}
-                placeholder="Item name"
-                required
-              />
-            </div>
-            <div>
-              <label className="block text-sm font-medium text-gray-700 mb-1">Description</label>
-              <POSInput
-                value={itemFormData.description ?? ''}
-                onChange={(e) => setItemFormData((f) => ({ ...f, description: e.target.value }))}
-                placeholder="Short description"
-              />
-            </div>
-            <div>
-              <label className="block text-sm font-medium text-gray-700 mb-1">Base price (A$) *</label>
-              <POSInput
-                type="number"
-                keyboardType="number"
-                step="0.01"
-                min={0}
-                value={String(itemFormData.basePrice ?? '')}
-                onChange={(e) => setItemFormData((f) => ({ ...f, basePrice: parseFloat(e.target.value) || 0 }))}
-                required
-              />
-            </div>
-            {!editingItem && (
-              <div className="space-y-2">
-                <label className="block text-sm font-medium text-gray-700 mb-1">Category</label>
-                <select
-                  value={itemFormData.categoryId ?? ''}
-                  onChange={(e) => setItemFormData((f) => ({ ...f, categoryId: e.target.value }))}
-                  className="w-full rounded-md border border-gray-300 px-3 py-2 text-sm"
-                >
-                  {categories.map((c) => (
-                    <option key={c.id} value={c.id}>{c.name}</option>
-                  ))}
-                  <option value="__new__">➕ New category...</option>
-                </select>
-                {(itemFormData.categoryId === '__new__') && (
-                  <POSInput
-                    value={itemFormData.newCategoryName ?? ''}
-                    onChange={(e) => setItemFormData((f) => ({ ...f, newCategoryName: e.target.value }))}
-                    placeholder="Enter new category name"
-                    className="text-sm"
-                  />
-                )}
-              </div>
-            )}
-            <div>
-              <label className="block text-sm font-medium text-gray-700 mb-1">Image URL</label>
-              <POSInput
-                value={itemFormData.image ?? ''}
-                onChange={(e) => setItemFormData((f) => ({ ...f, image: e.target.value }))}
-                placeholder="https://..."
-              />
-            </div>
-            <div className="flex items-center gap-4">
-              <label className="flex items-center gap-2 cursor-pointer">
-                <input
-                  type="checkbox"
-                  checked={itemFormData.isAvailable !== false}
-                  onChange={(e) => setItemFormData((f) => ({ ...f, isAvailable: e.target.checked }))}
-                  className="rounded border-gray-300 text-orange-600 focus:ring-orange-500"
-                />
-                <span className="text-sm font-medium text-gray-700">Available</span>
-              </label>
-              <label className="flex items-center gap-2 cursor-pointer">
-                <input
-                  type="checkbox"
-                  checked={itemFormData.popular === true}
-                  onChange={(e) => setItemFormData((f) => ({ ...f, popular: e.target.checked }))}
-                  className="rounded border-gray-300 text-orange-600 focus:ring-orange-500"
-                />
-                <span className="text-sm font-medium text-gray-700">Popular</span>
-              </label>
-            </div>
-
-            <div>
-              <label className="block text-sm font-medium text-gray-700 mb-2">Remove options</label>
-              <p className="text-xs text-gray-500 mb-2">Options customers can select to remove (e.g. No onion). No extra charge.</p>
-              {(itemFormData.removeOptions ?? []).map((opt, idx) => (
-                <div key={opt.id || idx} className="flex gap-2 mb-2">
-                  <POSInput
-                    value={opt.name}
-                    onChange={(e) => setItemFormData((f) => {
-                      const list = [...(f.removeOptions ?? [])]
-                      list[idx] = { ...list[idx], name: e.target.value }
-                      return { ...f, removeOptions: list }
-                    })}
-                    placeholder="e.g. No onion"
-                    className="flex-1 text-sm"
-                  />
-                  <button
-                    type="button"
-                    onClick={() => setItemFormData((f) => ({ ...f, removeOptions: (f.removeOptions ?? []).filter((_, i) => i !== idx) }))}
-                    className="p-2 rounded-lg border border-red-200 text-red-600 hover:bg-red-50"
-                    aria-label="Remove option"
-                  >
-                    <Trash2 className="w-4 h-4" />
-                  </button>
-                </div>
-              ))}
-              <button
-                type="button"
-                onClick={() => setItemFormData((f) => ({ ...f, removeOptions: [...(f.removeOptions ?? []), { id: `rem_${Date.now()}`, name: '', price: 0 }] }))}
-                className="text-sm text-orange-600 font-medium hover:underline"
-              >
-                + Add remove option
-              </button>
-            </div>
-
-            <div>
-              <label className="block text-sm font-medium text-gray-700 mb-2">Extras</label>
-              <p className="text-xs text-gray-500 mb-2">Add-ons with optional price (e.g. Extra cheese A$2).</p>
-              {(itemFormData.extras ?? []).map((opt, idx) => (
-                <div key={opt.id || idx} className="flex gap-2 mb-2 items-center">
-                  <POSInput
-                    value={opt.name}
-                    onChange={(e) => setItemFormData((f) => {
-                      const list = [...(f.extras ?? [])]
-                      list[idx] = { ...list[idx], name: e.target.value }
-                      return { ...f, extras: list }
-                    })}
-                    placeholder="e.g. Extra cheese"
-                    className="flex-1 text-sm"
-                  />
-                  <POSInput
-                    type="number"
-                    keyboardType="number"
-                    step="0.01"
-                    min={0}
-                    value={String(opt.price ?? 0)}
-                    onChange={(e) => setItemFormData((f) => {
-                      const list = [...(f.extras ?? [])]
-                      list[idx] = { ...list[idx], price: parseFloat(e.target.value) || 0 }
-                      return { ...f, extras: list }
-                    })}
-                    placeholder="0"
-                    className="w-20 text-sm"
-                  />
-                  <span className="text-xs text-gray-500 w-6">A$</span>
-                  <button
-                    type="button"
-                    onClick={() => setItemFormData((f) => ({ ...f, extras: (f.extras ?? []).filter((_, i) => i !== idx) }))}
-                    className="p-2 rounded-lg border border-red-200 text-red-600 hover:bg-red-50"
-                    aria-label="Remove extra"
-                  >
-                    <Trash2 className="w-4 h-4" />
-                  </button>
-                </div>
-              ))}
-              <button
-                type="button"
-                onClick={() => setItemFormData((f) => ({ ...f, extras: [...(f.extras ?? []), { id: `ext_${Date.now()}`, name: '', price: 0 }] }))}
-                className="text-sm text-orange-600 font-medium hover:underline"
-              >
-                + Add extra
-              </button>
-            </div>
-
-            <div className="flex gap-3 justify-end pt-2">
-              <Button type="button" variant="ghost" onClick={closeItemModal}>
-                Cancel
-              </Button>
-              <Button
-                type="submit"
-                variant="primary"
-                disabled={!editingItem && itemFormData.categoryId === '__new__' && !(itemFormData.newCategoryName ?? '').trim()}
-              >
-                {editingItem ? 'Save changes' : 'Add item'}
-              </Button>
-            </div>
-          </form>
+            onCancel={closeItemModal}
+          />
         </DialogContent>
       </Dialog>
 
@@ -3562,30 +3542,26 @@ export function POSSystem({ restaurantId: restaurantIdProp }: { restaurantId?: s
           </div>
         </div>
 
-        {/* Right 35%: Pay button left, pricing right (aligns with cart column) */}
+        {/* Right 35%: Pay button (with total) left, Subtotal/GST stacked right */}
         <div className="w-[35%] min-w-[280px] flex-shrink-0 flex items-center justify-between gap-3 sm:gap-4 px-4 py-3 bg-gray-50">
           <Button
             onClick={() => setShowPaymentModal(true)}
             disabled={cart.length === 0}
             size="lg"
-            className="min-h-[52px] sm:min-h-[56px] px-4 sm:px-6 text-base sm:text-lg font-bold shadow-lg flex-shrink-0"
+            className="min-h-[64px] sm:min-h-[72px] px-5 sm:px-8 text-lg sm:text-xl font-bold shadow-lg flex-shrink-0 flex flex-col sm:flex-row items-center justify-center gap-0.5 sm:gap-2"
           >
-            <CreditCard className="w-5 h-5 sm:w-6 sm:h-6 mr-2" />
-            Pay
+            <CreditCard className="w-6 h-6 sm:w-7 sm:h-7 flex-shrink-0" />
+            <span>Pay A${total.toFixed(2)}</span>
           </Button>
-          <div className="text-right space-y-0.5 min-w-0">
-            <div className="flex flex-wrap justify-end gap-x-4 gap-y-0.5 text-xs text-gray-600">
-              <span>Subtotal (incl. GST): A${subtotalInclGst.toFixed(2)}</span>
-              <span>GST (10%): A${totalGst.toFixed(2)}</span>
-            </div>
+          <div className="text-right flex flex-col gap-1 min-w-0">
+            <p className="text-sm sm:text-base text-gray-700 font-medium">Subtotal (incl. GST): A${subtotalInclGst.toFixed(2)}</p>
+            <p className="text-sm sm:text-base text-gray-700 font-medium">GST (10%): A${totalGst.toFixed(2)}</p>
             {discount && (
-              <p className="text-xs text-green-600 font-medium">Discount: -A${discountAmount.toFixed(2)}</p>
+              <p className="text-sm text-green-600 font-medium">Discount: -A${discountAmount.toFixed(2)}</p>
             )}
             {surchargeApplied && (
-              <p className="text-xs text-gray-600">{surchargeApplied.label}: A${surchargeAmount.toFixed(2)}</p>
+              <p className="text-sm text-gray-600">{surchargeApplied.label}: A${surchargeAmount.toFixed(2)}</p>
             )}
-            <p className="text-sm text-gray-500">TOTAL</p>
-            <p className="text-lg sm:text-xl font-bold text-orange-600 tabular-nums">A${total.toFixed(2)}</p>
           </div>
         </div>
       </div>

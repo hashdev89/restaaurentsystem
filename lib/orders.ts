@@ -20,6 +20,13 @@ export interface SupabaseOrderRow {
   order_items?: SupabaseOrderItemRow[]
 }
 
+export interface OrderItemOptionsRow {
+  selectedRemoves?: string[]
+  selectedExtras?: { name: string; price: number }[]
+  spiceLevel?: string
+  specialRequest?: string
+}
+
 export interface SupabaseOrderItemRow {
   id: string
   order_id: string
@@ -28,16 +35,28 @@ export interface SupabaseOrderItemRow {
   quantity: number
   price: number
   customizations?: MenuItemCustomizationGroup[]
+  options?: OrderItemOptionsRow | null
 }
 
 export function normalizeOrder(row: SupabaseOrderRow): Order {
-  const items: OrderItem[] = (row.order_items || []).map((oi) => ({
-    menuItemId: oi.menu_item_id || oi.id,
-    name: oi.name,
-    quantity: oi.quantity,
-    price: Number(oi.price),
-    ...(oi.customizations && oi.customizations.length > 0 ? { customizations: oi.customizations } : {})
-  }))
+  const items: OrderItem[] = (row.order_items || []).map((oi) => {
+    const opts = oi.options
+    return {
+      menuItemId: oi.menu_item_id || oi.id,
+      name: oi.name,
+      quantity: oi.quantity,
+      price: Number(oi.price),
+      ...(oi.customizations && oi.customizations.length > 0 ? { customizations: oi.customizations } : {}),
+      ...(opts && (opts.selectedRemoves?.length || opts.selectedExtras?.length || opts.spiceLevel || opts.specialRequest)
+        ? {
+            selectedRemoves: opts.selectedRemoves,
+            selectedExtras: opts.selectedExtras,
+            spiceLevel: opts.spiceLevel ?? undefined,
+            specialRequest: opts.specialRequest ?? undefined
+          }
+        : {})
+    }
+  })
   return {
     id: row.id,
     restaurantId: row.restaurant_id,

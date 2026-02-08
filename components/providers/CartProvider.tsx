@@ -1,17 +1,35 @@
 'use client'
 
 import { useEffect, useState, createContext, useContext } from 'react'
-import { CartItem, MenuItem } from '@/types'
+import { CartItem, MenuItem, SelectedExtra } from '@/types'
+
+/** Stable key for matching cart lines with same customizations (removes, extras, spice, request). */
+export function getCartLineKey(item: CartItem): string {
+  const r = (item.selectedRemoves ?? []).slice().sort().join(',')
+  const e = (item.selectedExtras ?? []).map((x) => x.id).sort().join(',')
+  const s = item.spiceLevel ?? ''
+  const t = item.specialRequest ?? ''
+  return [r, e, s, t].join('|')
+}
+
+export type AddItemOptions = {
+  selectedSize?: string
+  sizePrice?: number
+  selectedRemoves?: string[]
+  selectedExtras?: SelectedExtra[]
+  spiceLevel?: string
+  specialRequest?: string
+}
 
 interface CartContextType {
   items: CartItem[]
-  addItem: (item: MenuItem) => void
-  removeItem: (itemId: string) => void
-  updateQuantity: (itemId: string, quantity: number) => void
+  /** When item has sizes/customizations, pass options for price and line matching. */
+  addItem: (item: MenuItem, options?: AddItemOptions) => void
+  removeItem: (itemId: string, selectedSize?: string, optionsKey?: string) => void
+  updateQuantity: (itemId: string, quantity: number, selectedSize?: string, optionsKey?: string) => void
   clearCart: () => void
   total: number
   itemCount: number
-  /** Table number when customer scans QR (dine-in); used at checkout */
   tableNumber: string | null
   setTableNumber: (table: string | null) => void
 }
@@ -53,29 +71,71 @@ export function CartProvider({ children }: { children: React.ReactNode }) {
     localStorage.setItem('restaurant-cart', JSON.stringify(items))
   }, [items])
 
-  const addItem = (item: MenuItem) => {
+  const addItem = (item: MenuItem, options?: AddItemOptions) => {
+    const sizeLabel = options?.selectedSize ?? ''
+    const basePrice = options?.sizePrice != null ? options.sizePrice : item.price
+    const extrasTotal = (options?.selectedExtras ?? []).reduce((sum, e) => sum + (e.price ?? 0), 0)
+    const effectivePrice = basePrice + extrasTotal
+    const incomingKey = [
+      (options?.selectedRemoves ?? []).slice().sort().join(','),
+      (options?.selectedExtras ?? []).map((x) => x.id).sort().join(','),
+      options?.spiceLevel ?? '',
+      options?.specialRequest ?? ''
+    ].join('|')
     setItems((prev) => {
-      const existing = prev.find((i) => i.id === item.id)
+      const existing = prev.find(
+        (i) =>
+          i.id === item.id &&
+          (i.selectedSize ?? '') === sizeLabel &&
+          getCartLineKey(i) === incomingKey
+      )
       if (existing) {
         return prev.map((i) =>
-          i.id === item.id ? { ...i, quantity: i.quantity + 1 } : i
+          i.id === item.id && (i.selectedSize ?? '') === sizeLabel && getCartLineKey(i) === incomingKey
+            ? { ...i, quantity: i.quantity + 1 }
+            : i
         )
       }
-      return [...prev, { ...item, quantity: 1 }]
+      const newItem: CartItem = {
+        ...item,
+        price: effectivePrice,
+        quantity: 1,
+        ...(sizeLabel ? { selectedSize: sizeLabel } : {}),
+        ...(options?.selectedRemoves?.length ? { selectedRemoves: options.selectedRemoves } : {}),
+        ...(options?.selectedExtras?.length ? { selectedExtras: options.selectedExtras } : {}),
+        ...(options?.spiceLevel ? { spiceLevel: options.spiceLevel } : {}),
+        ...(options?.specialRequest ? { specialRequest: options.specialRequest } : {})
+      }
+      return [...prev, newItem]
     })
   }
 
-  const removeItem = (itemId: string) => {
-    setItems((prev) => prev.filter((i) => i.id !== itemId))
+  const removeItem = (itemId: string, selectedSize?: string, optionsKey?: string) => {
+    const key = optionsKey ?? ''
+    setItems((prev) =>
+      prev.filter(
+        (i) =>
+          !(
+            i.id === itemId &&
+            (i.selectedSize ?? '') === (selectedSize ?? '') &&
+            getCartLineKey(i) === key
+          )
+      )
+    )
   }
 
-  const updateQuantity = (itemId: string, quantity: number) => {
+  const updateQuantity = (itemId: string, quantity: number, selectedSize?: string, optionsKey?: string) => {
     if (quantity < 1) {
-      removeItem(itemId)
+      removeItem(itemId, selectedSize, optionsKey)
       return
     }
+    const key = optionsKey ?? ''
     setItems((prev) =>
-      prev.map((i) => (i.id === itemId ? { ...i, quantity } : i))
+      prev.map((i) =>
+        i.id === itemId && (i.selectedSize ?? '') === (selectedSize ?? '') && getCartLineKey(i) === key
+          ? { ...i, quantity }
+          : i
+      )
     )
   }
 
@@ -83,7 +143,7 @@ export function CartProvider({ children }: { children: React.ReactNode }) {
     setItems([])
   }
 
-  const total = items.reduce((sum, item) => sum + item.price * item.quantity, 0)
+  const total = items.reduce((sum, item) => sum + (item.price ?? 0) * item.quantity, 0)
   const itemCount = items.reduce((sum, item) => sum + item.quantity, 0)
 
   return (

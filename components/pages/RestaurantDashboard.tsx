@@ -75,6 +75,23 @@ export function RestaurantDashboard({ restaurantId: restaurantIdProp }: { restau
   const [surchargeNewDate, setSurchargeNewDate] = useState('')
   const [surchargeManualOverride, setSurchargeManualOverride] = useState<'auto' | 'sunday' | 'public_holiday' | 'none'>('auto')
   const [surchargeSaving, setSurchargeSaving] = useState(false)
+  const [restaurantName, setRestaurantName] = useState('')
+
+  // Fetch restaurant name for dashboard title
+  useEffect(() => {
+    if (!currentRestaurantId) {
+      setRestaurantName('')
+      return
+    }
+    let cancelled = false
+    fetch(`/api/restaurants/${currentRestaurantId}`)
+      .then((res) => (res.ok ? res.json() : null))
+      .then((data) => {
+        if (!cancelled && data?.restaurant?.name) setRestaurantName(data.restaurant.name)
+      })
+      .catch(() => { if (!cancelled) setRestaurantName('') })
+    return () => { cancelled = true }
+  }, [currentRestaurantId])
 
   const fetchOrders = useCallback(async () => {
     try {
@@ -423,7 +440,8 @@ export function RestaurantDashboard({ restaurantId: restaurantIdProp }: { restau
             category: data.category,
             image: data.image,
             isAvailable: data.isAvailable,
-            customizations: data.customizations
+            customizations: data.customizations,
+            sizes: data.sizes
           })
         })
         if (!res.ok) {
@@ -443,7 +461,8 @@ export function RestaurantDashboard({ restaurantId: restaurantIdProp }: { restau
             category: data.category ?? 'Other',
             image: data.image ?? '',
             isAvailable: data.isAvailable !== false,
-            customizations: data.customizations
+            customizations: data.customizations,
+            sizes: data.sizes
           })
         })
         if (!res.ok) {
@@ -497,8 +516,11 @@ export function RestaurantDashboard({ restaurantId: restaurantIdProp }: { restau
       <nav className="bg-white shadow-sm border-b border-orange-100 sticky top-16 z-40">
         <div className="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8">
           <div className="flex justify-between h-16">
-            <div className="flex items-center">
-              <h1 className="text-xl font-bold text-gray-900">Restaurant Dashboard</h1>
+            <div className="flex flex-col gap-0.5 pt-2.5">
+              {restaurantName && (
+                <span className="text-xl font-bold text-gray-900 leading-tight">{restaurantName}</span>
+              )}
+              <span className="text-sm font-medium text-gray-500 leading-tight">Restaurant Dashboard</span>
             </div>
             <div className="flex items-center gap-4">
               {currentRestaurantId && (
@@ -1122,6 +1144,7 @@ export function RestaurantDashboard({ restaurantId: restaurantIdProp }: { restau
                     order={order}
                     onAccept={handleAcceptOrder}
                     onReject={handleRejectOrder}
+                    showOrderSummary={false}
                   />
                 ))}
               </div>
@@ -1154,11 +1177,12 @@ export function RestaurantDashboard({ restaurantId: restaurantIdProp }: { restau
         )}
       </main>
 
-      {/* Menu Item Modal */}
+      {/* Menu Item Modal - close only via Close button, not overlay */}
       <Modal
         isOpen={isModalOpen}
         onClose={() => setIsModalOpen(false)}
         title={editingItem ? 'Edit Menu Item' : 'Add Menu Item'}
+        closeOnOverlayClick={false}
       >
         <MenuItemForm
           initialData={editingItem || undefined}

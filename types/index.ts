@@ -87,6 +87,12 @@ export interface MenuItemCustomizationGroup {
   options: MenuItemCustomizationOption[];
 }
 
+/** Size option with its own price (e.g. Small A$10, Medium A$12, Large A$14). */
+export interface MenuItemSize {
+  name: string;
+  price: number;
+}
+
 export interface MenuItem {
   id: string;
   restaurantId: string;
@@ -98,10 +104,37 @@ export interface MenuItem {
   isAvailable: boolean;
   /** Remove options and Extras defined in Restaurant Dashboard; POS uses these when adding item to order. */
   customizations?: MenuItemCustomizationGroup[];
+  /** Optional sizes (e.g. Small, Medium, Large) each with a price. When set, customer chooses a size; price is the chosen size's price. */
+  sizes?: MenuItemSize[];
+}
+
+/** Customer-selected extra (id + name + price for cart/order). */
+export interface SelectedExtra {
+  id: string;
+  name: string;
+  price: number;
+}
+
+/** Per-item options for online orders: removes, extras, spice level, custom request. */
+export interface CartItemOptions {
+  selectedRemoves?: string[];
+  selectedExtras?: SelectedExtra[];
+  spiceLevel?: string;
+  specialRequest?: string;
 }
 
 export interface CartItem extends MenuItem {
   quantity: number;
+  /** When item has sizes, the chosen size name (e.g. "Large") for display. */
+  selectedSize?: string;
+  /** Customer-selected remove option names (e.g. "No onion"). */
+  selectedRemoves?: string[];
+  /** Customer-selected extras with price (e.g. "Extra cheese" + A$2). */
+  selectedExtras?: SelectedExtra[];
+  /** Spice level: e.g. None, Mild, Medium, Hot, Extra Hot. */
+  spiceLevel?: string;
+  /** Free-text special request for this line. */
+  specialRequest?: string;
 }
 
 export interface OrderItem {
@@ -111,6 +144,11 @@ export interface OrderItem {
   price: number;
   /** Available customize options for this item (from menu_items); shown on order views. */
   customizations?: MenuItemCustomizationGroup[];
+  /** Customer-selected options when ordering online. */
+  selectedRemoves?: string[];
+  selectedExtras?: { name: string; price: number }[];
+  spiceLevel?: string;
+  specialRequest?: string;
 }
 
 export type OrderStatus = 'pending' | 'accepted' | 'preparing' | 'ready' | 'completed' | 'rejected';

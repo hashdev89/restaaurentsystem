@@ -1,7 +1,7 @@
 'use client'
 
 import { Check, X, Clock } from 'lucide-react'
-import { Order, MenuItemCustomizationGroup } from '@/types'
+import { Order, MenuItemCustomizationGroup, OrderItem } from '@/types'
 import { priceInclGst, GST_RATE } from '@/lib/gst'
 
 function ItemCustomizations({ customizations }: { customizations?: MenuItemCustomizationGroup[] }) {
@@ -22,6 +22,27 @@ function ItemCustomizations({ customizations }: { customizations?: MenuItemCusto
     </div>
   )
 }
+
+function ItemCustomerOptions({ item }: { item: OrderItem }) {
+  const has =
+    (item.selectedRemoves?.length ?? 0) > 0 ||
+    (item.selectedExtras?.length ?? 0) > 0 ||
+    !!item.spiceLevel ||
+    !!item.specialRequest
+  if (!has) return null
+  return (
+    <div className="text-xs text-gray-600 mt-0.5 space-y-0.5 ml-4">
+      {item.selectedRemoves?.length ? (
+        <div>Remove: {item.selectedRemoves.join(', ')}</div>
+      ) : null}
+      {item.selectedExtras?.length ? (
+        <div>Extras: {item.selectedExtras.map((e) => e.name).join(', ')}</div>
+      ) : null}
+      {item.spiceLevel ? <div>Spice: {item.spiceLevel}</div> : null}
+      {item.specialRequest ? <div>Note: {item.specialRequest}</div> : null}
+    </div>
+  )
+}
 import { Card } from './ui/Card'
 import { Badge } from './ui/Badge'
 import { Button } from './ui/Button'
@@ -31,9 +52,11 @@ interface OrderCardProps {
   onAccept?: (orderId: string) => void
   onReject?: (orderId: string) => void
   onProceedToBilling?: (orderId: string) => void
+  /** When false, hide Subtotal, GST, Service fee, TOTAL. Default true. */
+  showOrderSummary?: boolean
 }
 
-export function OrderCard({ order, onAccept, onReject, onProceedToBilling }: OrderCardProps) {
+export function OrderCard({ order, onAccept, onReject, onProceedToBilling, showOrderSummary = true }: OrderCardProps) {
   const subtotalInclGst = Math.max(0, order.total - 1)
   const gstIncluded = subtotalInclGst * (GST_RATE / (1 + GST_RATE))
   const statusVariant = {
@@ -109,27 +132,30 @@ export function OrderCard({ order, onAccept, onReject, onProceedToBilling }: Ord
                 </span>
               </div>
               <ItemCustomizations customizations={item.customizations} />
+              <ItemCustomerOptions item={item} />
             </li>
           ))}
         </ul>
-        <div className="mt-3 pt-3 border-t border-gray-200 space-y-1 text-sm">
-          <div className="flex justify-between text-gray-600">
-            <span>Subtotal (incl. GST)</span>
-            <span>A${subtotalInclGst.toFixed(2)}</span>
+        {showOrderSummary && (
+          <div className="mt-3 pt-3 border-t border-gray-200 space-y-1 text-sm">
+            <div className="flex justify-between text-gray-600">
+              <span>Subtotal (incl. GST)</span>
+              <span>A${subtotalInclGst.toFixed(2)}</span>
+            </div>
+            <div className="flex justify-between text-gray-600">
+              <span>GST included (10%)</span>
+              <span>A${gstIncluded.toFixed(2)}</span>
+            </div>
+            <div className="flex justify-between text-gray-600">
+              <span>Service fee</span>
+              <span>A$1.00</span>
+            </div>
+            <div className="flex justify-between font-semibold text-gray-900 pt-1">
+              <span>TOTAL</span>
+              <span>A${order.total.toFixed(2)}</span>
+            </div>
           </div>
-          <div className="flex justify-between text-gray-600">
-            <span>GST included (10%)</span>
-            <span>A${gstIncluded.toFixed(2)}</span>
-          </div>
-          <div className="flex justify-between text-gray-600">
-            <span>Service fee</span>
-            <span>A$1.00</span>
-          </div>
-          <div className="flex justify-between font-semibold text-gray-900 pt-1">
-            <span>TOTAL</span>
-            <span>A${order.total.toFixed(2)}</span>
-          </div>
-        </div>
+        )}
       </div>
 
       {order.status === 'pending' && onAccept && onReject && (

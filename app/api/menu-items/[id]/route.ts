@@ -13,11 +13,15 @@ type MenuItemRow = {
   image: string | null
   is_available: boolean
   customizations?: unknown
+  sizes?: unknown
 }
 
 function toMenuItem(row: MenuItemRow) {
   const customizations = row.customizations != null && Array.isArray(row.customizations)
     ? (row.customizations as { id: string; name: string; type: string; options: { id: string; name: string; price: number }[] }[])
+    : undefined
+  const sizes = row.sizes != null && Array.isArray(row.sizes)
+    ? (row.sizes as { name: string; price: number }[]).filter((s) => s && typeof s.name === 'string')
     : undefined
   return {
     id: row.id,
@@ -29,6 +33,7 @@ function toMenuItem(row: MenuItemRow) {
     image: row.image ?? '',
     isAvailable: row.is_available,
     ...(customizations && customizations.length > 0 ? { customizations } : {}),
+    ...(sizes && sizes.length > 0 ? { sizes } : {}),
   }
 }
 
@@ -48,6 +53,7 @@ export async function PATCH(
     if (body.image !== undefined) updates.image = body.image == null ? null : String(body.image).trim()
     if (body.isAvailable !== undefined) updates.is_available = body.isAvailable !== false
     if (body.customizations !== undefined) updates.customizations = Array.isArray(body.customizations) ? body.customizations : null
+    if (body.sizes !== undefined) updates.sizes = Array.isArray(body.sizes) ? body.sizes : null
     if (Object.keys(updates).length === 0) {
       return NextResponse.json({ error: 'No fields to update' }, { status: 400 })
     }
