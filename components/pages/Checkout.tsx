@@ -67,12 +67,13 @@ function saveCustomerProfile(profile: CustomerProfile) {
 type StripePayFormProps = {
   orderId: string
   paymentIntentId: string
+  orderType: string
   amountDisplay: string
   onSuccess: () => void
   onError: (message: string) => void
 }
 
-function StripePayForm({ orderId, paymentIntentId, amountDisplay, onSuccess, onError }: StripePayFormProps) {
+function StripePayForm({ orderId, paymentIntentId, orderType, amountDisplay, onSuccess, onError }: StripePayFormProps) {
   const stripe = useStripe()
   const elements = useElements()
   const [isConfirming, setIsConfirming] = useState(false)
@@ -85,7 +86,7 @@ function StripePayForm({ orderId, paymentIntentId, amountDisplay, onSuccess, onE
       const { error } = await stripe.confirmPayment({
         elements,
         confirmParams: {
-          return_url: `${window.location.origin}/confirmation?orderId=${orderId}&orderType=pickup`,
+          return_url: `${window.location.origin}/confirmation?orderId=${orderId}&orderType=${orderType}`,
           receipt_email: undefined
         }
       })
@@ -116,7 +117,7 @@ function StripePayForm({ orderId, paymentIntentId, amountDisplay, onSuccess, onE
       <PaymentElement
         options={{
           layout: 'tabs',
-          paymentMethodOrder: ['apple_pay', 'google_pay', 'card', 'link']
+          paymentMethodOrder: ['card', 'link']
         }}
       />
       <Button type="submit" size="lg" className="w-full" isLoading={isConfirming} disabled={!stripe || isConfirming}>
@@ -305,6 +306,11 @@ export function Checkout() {
     router.push(`/confirmation?orderId=${stripeData?.orderId}&orderType=${orderType}`)
   }
 
+  const Wrapper = stripeData ? 'div' : 'form'
+  const wrapperProps = stripeData
+    ? { className: 'flex flex-col lg:flex-row lg:gap-10 lg:items-start w-full' }
+    : { onSubmit: handleSubmit, className: 'flex flex-col lg:flex-row lg:gap-10 lg:items-start w-full' }
+
   return (
     <div className="min-h-screen w-full bg-gray-50 flex flex-col">
       <div className="flex-1 w-full max-w-6xl mx-auto py-6 px-4 sm:px-6 lg:px-8 lg:py-8 lg:min-h-[calc(100vh-4rem)]">
@@ -315,7 +321,7 @@ export function Checkout() {
           <h1 className="text-2xl font-bold text-gray-900">Checkout</h1>
         </div>
 
-        <form onSubmit={handleSubmit} className="flex flex-col lg:flex-row lg:gap-10 lg:items-start w-full">
+        <Wrapper {...wrapperProps}>
           <div className="flex-1 min-w-0 space-y-6">
             {/* Order Type Selection */}
             <Card
@@ -457,7 +463,7 @@ export function Checkout() {
               </Card>
             )}
 
-            {/* Payment: standard section — pay on collect or pay now (Card / Apple Pay / Google Pay) */}
+            {/* Payment: standard section — pay on collect or pay now (Card) */}
             <Card
               header={<h2 className="text-lg font-semibold">Payment</h2>}
             >
@@ -489,11 +495,11 @@ export function Checkout() {
                             onChange={() => setPaymentMethod('pay-now')}
                             className="rounded-full border-gray-300 text-orange-600 focus:ring-orange-500"
                           />
-                          <span className="text-gray-700">Pay now — Card, Apple Pay, Google Pay</span>
+                          <span className="text-gray-700">Pay now — Card</span>
                         </label>
                         {paymentMethod === 'pay-now' && (
                           <p className="text-sm text-gray-600 ml-6">
-                            Pay securely before placing your order. Card, Apple Pay, and Google Pay accepted.
+                            Pay securely before placing your order. Card payment accepted.
                           </p>
                         )}
                       </>
@@ -503,13 +509,14 @@ export function Checkout() {
               ) : (
                 <div className="space-y-4">
                   <p className="text-sm text-gray-600">
-                    Pay with Card, Apple Pay, or Google Pay. Apple Pay and Google Pay appear as options when your device and browser support them.
+                    Pay with your card.
                   </p>
                   {stripePromise && stripeData && (
-                    <Elements stripe={stripePromise} options={{ clientSecret: stripeData.clientSecret, appearance: { theme: 'stripe' } }}>
+                    <Elements key={stripeData.paymentIntentId} stripe={stripePromise} options={{ clientSecret: stripeData.clientSecret, appearance: { theme: 'stripe' } }}>
                       <StripePayForm
                         orderId={stripeData.orderId}
                         paymentIntentId={stripeData.paymentIntentId}
+                        orderType={orderType}
                         amountDisplay={`A$${finalTotal.toFixed(2)}`}
                         onSuccess={handleStripePaymentSuccess}
                         onError={(msg) => error('Payment failed', msg)}
@@ -587,7 +594,7 @@ export function Checkout() {
               )}
             </Card>
           </div>
-        </form>
+        </Wrapper>
       </div>
     </div>
   )

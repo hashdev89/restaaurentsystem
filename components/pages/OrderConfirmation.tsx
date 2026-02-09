@@ -2,6 +2,7 @@
 
 import { useSearchParams, useRouter } from 'next/navigation'
 import Link from 'next/link'
+import { useEffect, useRef } from 'react'
 import { CheckCircle, ArrowRight } from 'lucide-react'
 import { Button } from '../ui/Button'
 import { Card } from '../ui/Card'
@@ -11,6 +12,20 @@ export function OrderConfirmation() {
   const router = useRouter()
   const orderId = searchParams.get('orderId')
   const orderType = searchParams.get('orderType')
+  const redirectStatus = searchParams.get('redirect_status')
+  const paymentIntent = searchParams.get('payment_intent')
+  const confirmSent = useRef(false)
+
+  // When Stripe redirects after 3DS, mark the order as paid (front-end never called confirm-payment)
+  useEffect(() => {
+    if (!orderId || !paymentIntent || redirectStatus !== 'succeeded' || confirmSent.current) return
+    confirmSent.current = true
+    fetch('/api/stripe/confirm-payment', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ orderId, paymentIntentId: paymentIntent })
+    }).catch(() => {})
+  }, [orderId, paymentIntent, redirectStatus])
 
   if (!orderId) {
     router.push('/')
