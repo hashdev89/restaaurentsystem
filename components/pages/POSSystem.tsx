@@ -692,7 +692,7 @@ export function POSSystem({ restaurantId: restaurantIdProp }: { restaurantId?: s
   const [transactions, setTransactions] = useState<POSTransaction[]>([])
   const [showItemModal, setShowItemModal] = useState(false)
   const [editingItem, setEditingItem] = useState<POSSubItem | null>(null)
-  const [_itemFormData, setItemFormData] = useState<Partial<POSSubItem> & { categoryId?: string; newCategoryName?: string; removeOptions?: CustomizationOption[]; extras?: CustomizationOption[] }>({})
+  const [, setItemFormData] = useState<Partial<POSSubItem> & { categoryId?: string; newCategoryName?: string; removeOptions?: CustomizationOption[]; extras?: CustomizationOption[] }>({})
   const [defaultRestaurantId, setDefaultRestaurantId] = useState<string>('')
   const [barcodeScanValue, setBarcodeScanValue] = useState('')
   const barcodeInputRef = useRef<HTMLInputElement>(null)

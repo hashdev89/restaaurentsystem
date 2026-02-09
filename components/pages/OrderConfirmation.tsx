@@ -24,7 +24,7 @@ export function OrderConfirmation() {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({ orderId, paymentIntentId: paymentIntent })
-    }).catch(() => {})
+    }).catch(() => { /* confirm-payment best-effort on redirect */ })
   }, [orderId, paymentIntent, redirectStatus])
 
   if (!orderId) {
