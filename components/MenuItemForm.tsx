@@ -94,7 +94,7 @@ export function MenuItemForm({ initialData, categoryOptions, allowDeleteOptions 
     if (removeOptions.filter((o) => (o.name ?? '').trim()).length > 0) {
       customizations.push({
         id: 'remove_options',
-        name: 'Remove options',
+        name: 'Options',
         type: 'remove',
         options: removeOptions.filter((o) => (o.name ?? '').trim()).map((o, i) => ({ id: o.id || `rem_${i}`, name: o.name.trim(), price: 0 }))
       })
@@ -237,8 +237,8 @@ export function MenuItemForm({ initialData, categoryOptions, allowDeleteOptions 
       />
 
       <div>
-        <label className="block text-sm font-medium text-gray-700 mb-2">Remove options</label>
-        <p className="text-xs text-gray-500 mb-2">Options customers can select to remove (e.g. No onion). No extra charge.</p>
+        <label className="block text-sm font-medium text-gray-700 mb-2">Options</label>
+        <p className="text-xs text-gray-500 mb-2">Options customers can select (e.g. No onion, No tomato). No extra charge. Add or delete as needed.</p>
         {removeOptions.map((opt, idx) => (
           <div key={opt.id || idx} className="flex gap-2 mb-2">
             <Input
@@ -269,7 +269,7 @@ export function MenuItemForm({ initialData, categoryOptions, allowDeleteOptions 
             onClick={() => setRemoveOptions([...removeOptions, { id: `rem_${Date.now()}`, name: '', price: 0 }])}
             className="text-sm text-orange-600 font-medium hover:underline"
           >
-            + Add remove option
+            + Add option
           </button>
         )}
       </div>

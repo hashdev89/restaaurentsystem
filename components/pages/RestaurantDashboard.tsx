@@ -2,12 +2,14 @@
 
 import { useState, useEffect, useCallback, useMemo } from 'react'
 import Link from 'next/link'
-import { LayoutDashboard, History, LogOut, Utensils, Plus, Edit, Trash2, Hash, Package, Printer, User, Clock, Lock, Percent } from 'lucide-react'
-import { Order, MenuItem } from '@/types'
+import { LayoutDashboard, History, LogOut, Utensils, Plus, Edit, Trash2, Hash, Package, Printer, User, Clock, Lock, Percent, Layers } from 'lucide-react'
+import { Order, MenuItem, MenuItemCustomizationOption } from '@/types'
 import { OrderCard } from '../OrderCard'
 import { Button } from '../ui/Button'
 import { Card } from '../ui/Card'
 import { Modal } from '../ui/Modal'
+import { Input } from '../ui/Input'
+import { Select } from '../ui/Select'
 import { MenuItemForm } from '../MenuItemForm'
 import { normalizeOrders, type SupabaseOrderRow } from '@/lib/orders'
 import { priceInclGst } from '@/lib/gst'
@@ -51,6 +53,14 @@ export function RestaurantDashboard({ restaurantId: restaurantIdProp }: { restau
   const [activeTab, setActiveTab] = useState<'pending' | 'ready' | 'history' | 'menu' | 'tables' | 'stock' | 'staff' | 'shift' | 'access' | 'surcharges'>('pending')
   const [isModalOpen, setIsModalOpen] = useState(false)
   const [editingItem, setEditingItem] = useState<Partial<MenuItem> | null>(null)
+  const CATEGORY_OPTIONS_NEW = '__new_category__'
+  const [categoryOptionsModalOpen, setCategoryOptionsModalOpen] = useState(false)
+  const [categoryOptionsCategory, setCategoryOptionsCategory] = useState('')
+  const [categoryOptionsNewCategoryName, setCategoryOptionsNewCategoryName] = useState('')
+  const [categoryRemoveOptions, setCategoryRemoveOptions] = useState<MenuItemCustomizationOption[]>([])
+  const [categoryExtras, setCategoryExtras] = useState<MenuItemCustomizationOption[]>([])
+  const [categoryCustomizationsByCategory, setCategoryCustomizationsByCategory] = useState<Record<string, { id: string; name: string; type: string; options: { id: string; name: string; price: number }[] }[]>>({})
+  const [categoryOptionsSaving, setCategoryOptionsSaving] = useState(false)
   const [ordersLoading, setOrdersLoading] = useState(true)
   const [tables, setTables] = useState<{ id: string; table_number: string; capacity: number; status: string; location?: string }[]>([])
   const [inventory, setInventory] = useState<{ id: string; barcode: string; name: string; quantity: number; price: number }[]>([])
@@ -207,6 +217,18 @@ export function RestaurantDashboard({ restaurantId: restaurantIdProp }: { restau
     }
   }, [currentRestaurantId])
 
+  const fetchCategoryCustomizations = useCallback(async () => {
+    if (!currentRestaurantId) return
+    try {
+      const res = await fetch(`/api/category-customizations?restaurantId=${encodeURIComponent(currentRestaurantId)}`)
+      if (!res.ok) return
+      const data = await res.json()
+      setCategoryCustomizationsByCategory(data.customizationsByCategory ?? {})
+    } catch (e) {
+      console.error('Fetch category customizations error:', e)
+    }
+  }, [currentRestaurantId])
+
   useEffect(() => {
     if (activeTab === 'tables') fetchTables()
   }, [activeTab, fetchTables])
@@ -216,8 +238,29 @@ export function RestaurantDashboard({ restaurantId: restaurantIdProp }: { restau
   }, [activeTab, fetchInventory])
 
   useEffect(() => {
-    if (activeTab === 'menu') fetchMenuItems()
-  }, [activeTab, fetchMenuItems])
+    if (activeTab === 'menu') {
+      fetchMenuItems()
+      fetchCategoryCustomizations()
+    }
+  }, [activeTab, fetchMenuItems, fetchCategoryCustomizations])
+
+  useEffect(() => {
+    if (!categoryOptionsModalOpen || !categoryOptionsCategory || categoryOptionsCategory === CATEGORY_OPTIONS_NEW) return
+    const groups = categoryCustomizationsByCategory[categoryOptionsCategory]
+    if (!groups?.length) {
+      setCategoryRemoveOptions([])
+      setCategoryExtras([])
+      return
+    }
+    let removeOpts: MenuItemCustomizationOption[] = []
+    let extraOpts: MenuItemCustomizationOption[] = []
+    for (const g of groups) {
+      if (g.type === 'remove') removeOpts = (g.options || []).map((o) => ({ id: o.id, name: o.name, price: 0 }))
+      if (g.type === 'extra') extraOpts = (g.options || []).map((o) => ({ id: o.id, name: o.name, price: o.price ?? 0 }))
+    }
+    setCategoryRemoveOptions(removeOpts)
+    setCategoryExtras(extraOpts)
+  }, [categoryOptionsModalOpen, categoryOptionsCategory, categoryCustomizationsByCategory])
 
   useEffect(() => {
     if (activeTab === 'access' && currentRestaurantId) {
@@ -476,6 +519,58 @@ export function RestaurantDashboard({ restaurantId: restaurantIdProp }: { restau
       await fetchMenuItems()
     } catch (e) {
       error('Could not save', e instanceof Error ? e.message : 'Failed to save menu item')
+    }
+  }
+
+  const handleSaveCategoryOptions = async () => {
+    const effectiveCategory = categoryOptionsCategory === CATEGORY_OPTIONS_NEW
+      ? categoryOptionsNewCategoryName?.trim()
+      : categoryOptionsCategory?.trim()
+    if (!currentRestaurantId || !effectiveCategory) {
+      error('Category required', categoryOptionsCategory === CATEGORY_OPTIONS_NEW ? 'Enter a name for the new category.' : 'Select a category.')
+      return
+    }
+    setCategoryOptionsSaving(true)
+    try {
+      const customizations: { id: string; name: string; type: 'remove' | 'extra'; options: { id: string; name: string; price: number }[] }[] = []
+      const removeOpts = categoryRemoveOptions.filter((o) => (o.name ?? '').trim())
+      if (removeOpts.length > 0) {
+        customizations.push({
+          id: 'remove_options',
+          name: 'Options',
+          type: 'remove',
+          options: removeOpts.map((o, i) => ({ id: o.id || `rem_${i}`, name: (o.name ?? '').trim(), price: 0 }))
+        })
+      }
+      const extraOpts = categoryExtras.filter((o) => (o.name ?? '').trim())
+      if (extraOpts.length > 0) {
+        customizations.push({
+          id: 'extras',
+          name: 'Extras',
+          type: 'extra',
+          options: extraOpts.map((o, i) => ({ id: o.id || `ext_${i}`, name: (o.name ?? '').trim(), price: Number(o.price) || 0 }))
+        })
+      }
+      const res = await fetch('/api/category-customizations', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          restaurantId: currentRestaurantId,
+          category: effectiveCategory,
+          customizations
+        })
+      })
+      if (!res.ok) {
+        const data = await res.json().catch(() => ({}))
+        throw new Error(data.error || 'Failed to save')
+      }
+      success('Category options saved', `Options for "${effectiveCategory}" now apply to all items in this category.`)
+      await fetchCategoryCustomizations()
+      await fetchMenuItems()
+    } catch (e) {
+      error('Could not save', e instanceof Error ? e.message : 'Failed to save category options')
+    } finally {
+      setCategoryOptionsSaving(false)
     }
   }
 
@@ -1007,10 +1102,24 @@ export function RestaurantDashboard({ restaurantId: restaurantIdProp }: { restau
           <div>
             <div className="flex justify-between items-center mb-6">
               <h2 className="text-lg font-semibold text-gray-900">Manage Menu</h2>
-              <Button onClick={handleAddMenuItem} className="bg-orange-600 hover:bg-orange-700">
-                <Plus className="w-4 h-4 mr-2" />
-                Add New Item
-              </Button>
+              <div className="flex gap-2">
+                <Button
+                  variant="secondary"
+                  onClick={() => {
+                    setCategoryOptionsModalOpen(true)
+                    const firstExisting = menuCategoryOptions[0] || Object.keys(categoryCustomizationsByCategory)[0]
+                    setCategoryOptionsCategory(firstExisting || CATEGORY_OPTIONS_NEW)
+                    setCategoryOptionsNewCategoryName('')
+                  }}
+                >
+                  <Layers className="w-4 h-4 mr-2" />
+                  Category options
+                </Button>
+                <Button onClick={handleAddMenuItem} className="bg-orange-600 hover:bg-orange-700">
+                  <Plus className="w-4 h-4 mr-2" />
+                  Add New Item
+                </Button>
+              </div>
             </div>
 
             <Card className="overflow-hidden">
@@ -1190,6 +1299,127 @@ export function RestaurantDashboard({ restaurantId: restaurantIdProp }: { restau
           onSubmit={handleMenuItemSubmit}
           onCancel={() => setIsModalOpen(false)}
         />
+      </Modal>
+
+      {/* Category options modal: set remove/extras once per category; they apply to all items in that category */}
+      <Modal
+        isOpen={categoryOptionsModalOpen}
+        onClose={() => setCategoryOptionsModalOpen(false)}
+        title="Options for category"
+        closeOnOverlayClick={false}
+      >
+        <div className="space-y-4">
+          <p className="text-sm text-gray-600">
+            Set options and extras for a category. They will apply to <strong>all menu items</strong> in that category (e.g. all Pizzas get the same options). Add or delete options as needed.
+          </p>
+          <Select
+            label="Category"
+            value={categoryOptionsCategory}
+            onChange={(e) => {
+              setCategoryOptionsCategory(e.target.value)
+              if (e.target.value !== CATEGORY_OPTIONS_NEW) setCategoryOptionsNewCategoryName('')
+            }}
+            options={[
+              ...Array.from(new Set([...menuCategoryOptions, ...Object.keys(categoryCustomizationsByCategory)])).map((c) => ({ value: c, label: c })),
+              { value: CATEGORY_OPTIONS_NEW, label: '➕ New category...' }
+            ]}
+          />
+          {categoryOptionsCategory === CATEGORY_OPTIONS_NEW && (
+            <Input
+              label="New category name"
+              value={categoryOptionsNewCategoryName}
+              onChange={(e) => setCategoryOptionsNewCategoryName(e.target.value)}
+              placeholder="e.g. Pizza, Sides, Beverages"
+            />
+          )}
+          <div>
+            <label className="block text-sm font-medium text-gray-700 mb-2">Options</label>
+            <p className="text-xs text-gray-500 mb-2">Options customers can select (e.g. No tomato, No onion). No charge. Add or delete as needed.</p>
+            {categoryRemoveOptions.map((opt, idx) => (
+              <div key={opt.id || idx} className="flex gap-2 mb-2">
+                <Input
+                  value={opt.name}
+                  onChange={(e) => {
+                    const list = [...categoryRemoveOptions]
+                    list[idx] = { ...list[idx], name: e.target.value }
+                    setCategoryRemoveOptions(list)
+                  }}
+                  placeholder="e.g. No tomato"
+                  className="flex-1"
+                />
+                <button
+                  type="button"
+                  onClick={() => setCategoryRemoveOptions(categoryRemoveOptions.filter((_, i) => i !== idx))}
+                  className="p-2 rounded-lg border border-red-200 text-red-600 hover:bg-red-50"
+                  aria-label="Delete option"
+                >
+                  <Trash2 className="w-4 h-4" />
+                </button>
+              </div>
+            ))}
+            <button
+              type="button"
+              onClick={() => setCategoryRemoveOptions([...categoryRemoveOptions, { id: `rem_${Date.now()}`, name: '', price: 0 }])}
+              className="text-sm text-orange-600 font-medium hover:underline"
+            >
+              + Add option
+            </button>
+          </div>
+          <div>
+            <label className="block text-sm font-medium text-gray-700 mb-2">Extras</label>
+            <p className="text-xs text-gray-500 mb-2">Add-ons with optional price (e.g. Extra cheese A$2). Add or delete as needed.</p>
+            {categoryExtras.map((opt, idx) => (
+              <div key={opt.id || idx} className="flex gap-2 mb-2 items-center">
+                <Input
+                  value={opt.name}
+                  onChange={(e) => {
+                    const list = [...categoryExtras]
+                    list[idx] = { ...list[idx], name: e.target.value }
+                    setCategoryExtras(list)
+                  }}
+                  placeholder="e.g. Extra cheese"
+                  className="flex-1"
+                />
+                <Input
+                  type="number"
+                  step="0.01"
+                  min={0}
+                  value={String(opt.price ?? 0)}
+                  onChange={(e) => {
+                    const list = [...categoryExtras]
+                    list[idx] = { ...list[idx], price: parseFloat(e.target.value) || 0 }
+                    setCategoryExtras(list)
+                  }}
+                  className="w-20"
+                />
+                <span className="text-xs text-gray-500 w-6">A$</span>
+                <button
+                  type="button"
+                  onClick={() => setCategoryExtras(categoryExtras.filter((_, i) => i !== idx))}
+                  className="p-2 rounded-lg border border-red-200 text-red-600 hover:bg-red-50"
+                  aria-label="Delete extra"
+                >
+                  <Trash2 className="w-4 h-4" />
+                </button>
+              </div>
+            ))}
+            <button
+              type="button"
+              onClick={() => setCategoryExtras([...categoryExtras, { id: `ext_${Date.now()}`, name: '', price: 0 }])}
+              className="text-sm text-orange-600 font-medium hover:underline"
+            >
+              + Add extra
+            </button>
+          </div>
+          <div className="flex justify-end gap-3 pt-4">
+            <Button type="button" variant="secondary" onClick={() => setCategoryOptionsModalOpen(false)}>
+              Cancel
+            </Button>
+            <Button onClick={handleSaveCategoryOptions} isLoading={categoryOptionsSaving}>
+              Save for this category
+            </Button>
+          </div>
+        </div>
       </Modal>
     </div>
   )

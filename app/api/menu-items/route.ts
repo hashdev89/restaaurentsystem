@@ -24,13 +24,16 @@ type MenuItemRow = {
   sizes?: unknown
 }
 
-function toMenuItem(row: MenuItemRow) {
-  const customizations = row.customizations != null && Array.isArray(row.customizations)
-    ? (row.customizations as { id: string; name: string; type: string; options: { id: string; name: string; price: number }[] }[])
+type CustomizationGroup = { id: string; name: string; type: string; options: { id: string; name: string; price: number }[] }
+
+function toMenuItem(row: MenuItemRow, categoryCustomizations?: CustomizationGroup[]) {
+  const itemCustomizations = row.customizations != null && Array.isArray(row.customizations)
+    ? (row.customizations as CustomizationGroup[])
     : undefined
   const sizes = row.sizes != null && Array.isArray(row.sizes)
     ? (row.sizes as { name: string; price: number }[]).filter((s) => s && typeof s.name === 'string')
     : undefined
+  const merged = mergeCategoryCustomizations(itemCustomizations, categoryCustomizations)
   return {
     id: row.id,
     restaurantId: row.restaurant_id,
@@ -40,9 +43,39 @@ function toMenuItem(row: MenuItemRow) {
     category: row.category,
     image: row.image ?? '',
     isAvailable: row.is_available,
-    ...(customizations && customizations.length > 0 ? { customizations } : {}),
+    ...(merged && merged.length > 0 ? { customizations: merged } : {}),
     ...(sizes && sizes.length > 0 ? { sizes } : {}),
   }
+}
+
+function mergeCategoryCustomizations(
+  itemGroups: CustomizationGroup[] | undefined,
+  categoryGroups: CustomizationGroup[] | undefined
+): CustomizationGroup[] | undefined {
+  if (!categoryGroups?.length && !itemGroups?.length) return undefined
+  if (!categoryGroups?.length) return itemGroups
+  const byType = new Map<string, CustomizationGroup>()
+  for (const g of categoryGroups) {
+    if (g?.type && Array.isArray(g.options)) {
+      byType.set(g.type, { id: g.id || g.type, name: g.name || g.type, type: g.type, options: [...g.options] })
+    }
+  }
+  for (const g of itemGroups ?? []) {
+    if (!g?.type || !Array.isArray(g.options)) continue
+    const existing = byType.get(g.type)
+    const opts = existing ? [...existing.options] : []
+    const seen = new Set(opts.map((o) => o.id || o.name))
+    for (const o of g.options) {
+      const key = o.id || o.name
+      if (!seen.has(key)) {
+        opts.push(o)
+        seen.add(key)
+      }
+    }
+    byType.set(g.type, { id: g.id || g.type, name: g.name || g.type, type: g.type, options: opts })
+  }
+  const out = Array.from(byType.values()).filter((g) => g.options.length > 0)
+  return out.length ? out : undefined
 }
 
 export async function GET(request: NextRequest) {
@@ -53,14 +86,23 @@ export async function GET(request: NextRequest) {
       return NextResponse.json({ error: 'restaurantId is required' }, { status: 400 })
     }
     const restaurantId = resolveRestaurantId(restaurantIdParam)
-    const { data, error } = await supabase
-      .from('menu_items')
-      .select('*')
-      .eq('restaurant_id', restaurantId)
-      .order('category')
-      .order('name')
-    if (error) throw error
-    const items = (data ?? []).map(toMenuItem)
+    const [itemsRes, catRes] = await Promise.all([
+      supabase.from('menu_items').select('*').eq('restaurant_id', restaurantId).order('category').order('name'),
+      supabase.from('category_customizations').select('category, customizations').eq('restaurant_id', restaurantId)
+    ])
+    if (itemsRes.error) throw itemsRes.error
+    const catData = catRes.error && catRes.error.code === '42P01' ? [] : catRes.data ?? []
+    const byCategory: Record<string, CustomizationGroup[]> = {}
+    for (const row of catData) {
+      const r = row as { category: string; customizations: unknown }
+      if (r.category && Array.isArray(r.customizations) && r.customizations.length > 0) {
+        byCategory[r.category] = r.customizations as CustomizationGroup[]
+      }
+    }
+    const items = (itemsRes.data ?? []).map((row) => {
+      const categoryCust = byCategory[(row as MenuItemRow).category]
+      return toMenuItem(row as MenuItemRow, categoryCust)
+    })
     return NextResponse.json({ items })
   } catch (err: unknown) {
     console.error('GET menu-items error:', err)
