@@ -2,6 +2,18 @@ import { NextRequest, NextResponse } from 'next/server'
 import { getStripe } from '@/lib/stripe'
 import { supabase } from '@/lib/supabase'
 
+const UUID_REGEX = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i
+
+/** Normalize to a valid UUID (orders.id is uuid type). Handles "uuid-timestamp" or other suffixes. */
+function toOrderUuid(value: string | undefined): string | null {
+  const s = (value ?? '').trim()
+  if (!s) return null
+  if (UUID_REGEX.test(s)) return s
+  const uuidPart = s.slice(0, 36)
+  if (UUID_REGEX.test(uuidPart)) return uuidPart
+  return null
+}
+
 /**
  * After the client confirms payment with Stripe.js, call this to verify
  * the PaymentIntent succeeded and mark the order as paid.
@@ -27,9 +39,18 @@ export async function POST(request: NextRequest) {
       )
     }
 
-    const paymentIntent = await stripe.paymentIntents.retrieve(paymentIntentId)
+    const orderUuid = toOrderUuid(orderId)
+    if (!orderUuid) {
+      return NextResponse.json(
+        { error: 'Invalid order ID format.' },
+        { status: 400 }
+      )
+    }
 
-    if (paymentIntent.metadata?.orderId !== orderId) {
+    const paymentIntent = await stripe.paymentIntents.retrieve(paymentIntentId)
+    const metadataOrderUuid = toOrderUuid(paymentIntent.metadata?.orderId as string | undefined)
+
+    if (metadataOrderUuid !== orderUuid) {
       return NextResponse.json(
         { error: 'Payment does not match this order.' },
         { status: 400 }
@@ -50,7 +71,7 @@ export async function POST(request: NextRequest) {
         square_payment_id: paymentIntentId,
         updated_at: new Date().toISOString()
       })
-      .eq('id', orderId)
+      .eq('id', orderUuid)
 
     if (error) {
       console.error('Confirm payment DB update error:', error)

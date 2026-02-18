@@ -10,7 +10,7 @@ import { Card } from '../ui/Card'
 import { Modal } from '../ui/Modal'
 import { Input } from '../ui/Input'
 import { Select } from '../ui/Select'
-import { MenuItemForm } from '../MenuItemForm'
+import { MenuItemForm, type CategoryCustomizationsMap } from '../MenuItemForm'
 import { normalizeOrders, type SupabaseOrderRow } from '@/lib/orders'
 import { priceInclGst } from '@/lib/gst'
 import { useNotification } from '../providers/NotificationProvider'
@@ -85,6 +85,8 @@ export function RestaurantDashboard({ restaurantId: restaurantIdProp }: { restau
   const [surchargeNewDate, setSurchargeNewDate] = useState('')
   const [surchargeManualOverride, setSurchargeManualOverride] = useState<'auto' | 'sunday' | 'public_holiday' | 'none'>('auto')
   const [surchargeSaving, setSurchargeSaving] = useState(false)
+  const [onlineCardSurchargePercent, setOnlineCardSurchargePercent] = useState(0)
+  const [posCardSurchargePercent, setPosCardSurchargePercent] = useState(0)
   const [restaurantName, setRestaurantName] = useState('')
 
   // Fetch restaurant name for dashboard title
@@ -286,6 +288,8 @@ export function RestaurantDashboard({ restaurantId: restaurantIdProp }: { restau
             setSurchargePublicHolidayPercent(Number(r.publicHolidaySurchargePercent) || 0)
             setSurchargePublicHolidayDates(Array.isArray(r.publicHolidayDates) ? [...r.publicHolidayDates] : [])
             setSurchargeManualOverride(r.surchargeManualOverride === 'sunday' || r.surchargeManualOverride === 'public_holiday' || r.surchargeManualOverride === 'none' ? r.surchargeManualOverride : 'auto')
+            setOnlineCardSurchargePercent(Number(r.onlineCardSurchargePercent) ?? 0)
+            setPosCardSurchargePercent(Number(r.posCardSurchargePercent) ?? 0)
           }
         })
         .catch(() => { /* ignore */ })
@@ -444,6 +448,21 @@ export function RestaurantDashboard({ restaurantId: restaurantIdProp }: { restau
     const fromItems = menuItems.map((m) => m.category).filter(Boolean) as string[]
     return [...new Set([...defaults, ...fromItems])]
   }, [menuItems])
+
+  /** Convert category customizations (array of groups) to MenuItemForm shape: { removeOptions, extras } per category */
+  const categoryCustomizationsForForm = useMemo((): CategoryCustomizationsMap => {
+    const out: CategoryCustomizationsMap = {}
+    for (const [cat, groups] of Object.entries(categoryCustomizationsByCategory)) {
+      let removeOptions: MenuItemCustomizationOption[] = []
+      let extras: MenuItemCustomizationOption[] = []
+      for (const g of groups || []) {
+        if (g.type === 'remove') removeOptions = (g.options || []).map((o) => ({ id: o.id, name: o.name, price: 0 }))
+        if (g.type === 'extra') extras = (g.options || []).map((o) => ({ id: o.id, name: o.name, price: o.price ?? 0 }))
+      }
+      out[cat] = { removeOptions, extras }
+    }
+    return out
+  }, [categoryCustomizationsByCategory])
 
   const handleAddMenuItem = () => {
     setEditingItem(null)
@@ -792,6 +811,8 @@ export function RestaurantDashboard({ restaurantId: restaurantIdProp }: { restau
                         publicHolidaySurchargePercent: surchargePublicHolidayPercent,
                         publicHolidayDates: surchargePublicHolidayDates,
                         surchargeManualOverride: surchargeManualOverride,
+                        onlineCardSurchargePercent,
+                        posCardSurchargePercent,
                       }),
                     })
                     if (!res.ok) throw new Error('Failed to save')
@@ -896,6 +917,38 @@ export function RestaurantDashboard({ restaurantId: restaurantIdProp }: { restau
                         ))}
                       </ul>
                     )}
+                  </div>
+                </div>
+                <div>
+                  <h3 className="font-medium text-gray-900 mb-3">Card payment surcharges</h3>
+                  <p className="text-xs text-gray-500 mb-3">Percentage added when customer pays by card. Online surcharge applies to the customer cart/checkout; POS surcharge applies to in-store card payments.</p>
+                  <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
+                    <div>
+                      <label className="block text-sm font-medium text-gray-700 mb-1">Online payment (card) surcharge %</label>
+                      <input
+                        type="number"
+                        min={0}
+                        max={10}
+                        step={0.1}
+                        value={onlineCardSurchargePercent}
+                        onChange={(e) => setOnlineCardSurchargePercent(Math.max(0, Number(e.target.value) || 0))}
+                        className="w-full rounded-md border border-gray-300 px-2 py-1.5 text-sm"
+                      />
+                      <span className="text-xs text-gray-500">Applied at checkout when paying by card online</span>
+                    </div>
+                    <div>
+                      <label className="block text-sm font-medium text-gray-700 mb-1">POS card surcharge %</label>
+                      <input
+                        type="number"
+                        min={0}
+                        max={10}
+                        step={0.1}
+                        value={posCardSurchargePercent}
+                        onChange={(e) => setPosCardSurchargePercent(Math.max(0, Number(e.target.value) || 0))}
+                        className="w-full rounded-md border border-gray-300 px-2 py-1.5 text-sm"
+                      />
+                      <span className="text-xs text-gray-500">Applied in POS when payment method is card or mix</span>
+                    </div>
                   </div>
                 </div>
                 <div>
@@ -1296,6 +1349,7 @@ export function RestaurantDashboard({ restaurantId: restaurantIdProp }: { restau
         <MenuItemForm
           initialData={editingItem || undefined}
           categoryOptions={menuCategoryOptions}
+          categoryCustomizationsByCategory={categoryCustomizationsForForm}
           onSubmit={handleMenuItemSubmit}
           onCancel={() => setIsModalOpen(false)}
         />

@@ -2,7 +2,7 @@
 
 import { Check, X, Clock } from 'lucide-react'
 import { Order, MenuItemCustomizationGroup, OrderItem } from '@/types'
-import { priceInclGst, GST_RATE } from '@/lib/gst'
+import { GST_RATE } from '@/lib/gst'
 
 function ItemCustomizations({ customizations }: { customizations?: MenuItemCustomizationGroup[] }) {
   if (!customizations?.length) return null
@@ -56,9 +56,12 @@ interface OrderCardProps {
   showOrderSummary?: boolean
 }
 
+/** GST amount contained in a total that is already inclusive of 10% GST */
+function gstFromInclusive(totalInclGst: number): number {
+  return totalInclGst * (GST_RATE / (1 + GST_RATE))
+}
+
 export function OrderCard({ order, onAccept, onReject, onProceedToBilling, showOrderSummary = true }: OrderCardProps) {
-  const subtotalInclGst = Math.max(0, order.total - 1)
-  const gstIncluded = subtotalInclGst * (GST_RATE / (1 + GST_RATE))
   const statusVariant = {
     pending: 'warning',
     accepted: 'success',
@@ -118,42 +121,38 @@ export function OrderCard({ order, onAccept, onReject, onProceedToBilling, showO
 
       <div className="flex-1 mb-6">
         <ul className="space-y-2">
-          {order.items.map((item, idx) => (
-            <li key={idx} className="text-sm">
-              <div className="flex justify-between">
-                <span className="text-gray-700">
-                  <span className="font-medium text-gray-900">
-                    {item.quantity}x
-                  </span>{' '}
-                  {item.name}
-                </span>
-                <span className="text-gray-500">
-                  A${priceInclGst(item.price * item.quantity).toFixed(2)}
-                </span>
-              </div>
-              <ItemCustomizations customizations={item.customizations} />
-              <ItemCustomerOptions item={item} />
-            </li>
-          ))}
+          {order.items.map((item, idx) => {
+            const lineTotalInclGst = item.price * item.quantity
+            return (
+              <li key={idx} className="text-sm">
+                <div className="flex justify-between">
+                  <span className="text-gray-700">
+                    <span className="font-medium text-gray-900">
+                      {item.quantity}x
+                    </span>{' '}
+                    {item.name}
+                  </span>
+                  <span className="text-gray-700 font-medium">
+                    A${lineTotalInclGst.toFixed(2)}
+                  </span>
+                </div>
+                <ItemCustomizations customizations={item.customizations} />
+                <ItemCustomerOptions item={item} />
+              </li>
+            )
+          })}
         </ul>
         {showOrderSummary && (
           <div className="mt-3 pt-3 border-t border-gray-200 space-y-1 text-sm">
-            <div className="flex justify-between text-gray-600">
-              <span>Subtotal (incl. GST)</span>
-              <span>A${subtotalInclGst.toFixed(2)}</span>
-            </div>
-            <div className="flex justify-between text-gray-600">
-              <span>GST included (10%)</span>
-              <span>A${gstIncluded.toFixed(2)}</span>
-            </div>
-            <div className="flex justify-between text-gray-600">
-              <span>Service fee</span>
-              <span>A$1.00</span>
-            </div>
-            <div className="flex justify-between font-semibold text-gray-900 pt-1">
-              <span>TOTAL</span>
+            <div className="flex justify-between font-semibold text-gray-900">
+              <span>Total (Incl. GST)</span>
               <span>A${order.total.toFixed(2)}</span>
             </div>
+            <div className="flex justify-between text-gray-600">
+              <span>Total Includes GST of:</span>
+              <span>A${gstFromInclusive(order.total).toFixed(2)}</span>
+            </div>
+            <p className="text-xs text-gray-500 pt-1">All prices include 10% GST</p>
           </div>
         )}
       </div>

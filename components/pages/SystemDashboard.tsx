@@ -997,6 +997,7 @@ export function SystemDashboard() {
                             value={addRestaurantForm.loginPassword}
                             onChange={(e) => setAddRestaurantForm((f) => ({ ...f, loginPassword: e.target.value }))}
                             placeholder="••••••••"
+                            showPasswordToggle
                           />
                         </div>
                       </div>
@@ -1082,13 +1083,13 @@ export function SystemDashboard() {
                           <>
                             <p className="text-xs text-gray-500 mb-2">Login email: <strong>{editRestaurantUser.email}</strong></p>
                             <p className="text-xs text-gray-500 mb-2">Set a new password below and click Save to update.</p>
-                            <Input label="New password (min 8 characters — leave blank to keep current)" type="password" value={editRestaurantForm.loginPassword} onChange={(e) => setEditRestaurantForm((f) => ({ ...f, loginPassword: e.target.value }))} placeholder="••••••••" autoComplete="new-password" />
+                            <Input label="New password (min 8 characters — leave blank to keep current)" type="password" value={editRestaurantForm.loginPassword} onChange={(e) => setEditRestaurantForm((f) => ({ ...f, loginPassword: e.target.value }))} placeholder="••••••••" autoComplete="new-password" showPasswordToggle />
                           </>
                         ) : (
                           <>
                             <p className="text-xs text-gray-500 mb-2">No login yet. Add email and password below, then Save to create login for this restaurant.</p>
                             <Input label="Login email" type="email" value={editRestaurantForm.loginEmail} onChange={(e) => setEditRestaurantForm((f) => ({ ...f, loginEmail: e.target.value }))} placeholder="staff@restaurant.com" />
-                            <Input label="Login password (min 8 characters)" type="password" value={editRestaurantForm.loginPassword} onChange={(e) => setEditRestaurantForm((f) => ({ ...f, loginPassword: e.target.value }))} placeholder="••••••••" autoComplete="new-password" />
+                            <Input label="Login password (min 8 characters)" type="password" value={editRestaurantForm.loginPassword} onChange={(e) => setEditRestaurantForm((f) => ({ ...f, loginPassword: e.target.value }))} placeholder="••••••••" autoComplete="new-password" showPasswordToggle />
                           </>
                         )}
                       </div>

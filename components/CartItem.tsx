@@ -1,5 +1,6 @@
 'use client'
 
+import { useCallback } from 'react'
 import { Minus, Plus, Trash2 } from 'lucide-react'
 import { CartItem as CartItemType } from '@/types'
 import { useCart, getCartLineKey } from './providers/CartProvider'
@@ -21,9 +22,27 @@ export function CartItem({ item }: CartItemProps) {
     !!item.spiceLevel ||
     !!item.specialRequest
 
+  const handleDecrease = useCallback(
+    (e: React.MouseEvent | React.PointerEvent) => {
+      e.preventDefault()
+      e.stopPropagation()
+      updateQuantity(item.id, item.quantity - 1, lineKey)
+    },
+    [item.id, item.quantity, lineKey, updateQuantity]
+  )
+
+  const handleIncrease = useCallback(
+    (e: React.MouseEvent | React.PointerEvent) => {
+      e.preventDefault()
+      e.stopPropagation()
+      updateQuantity(item.id, item.quantity + 1, lineKey)
+    },
+    [item.id, item.quantity, lineKey, updateQuantity]
+  )
+
   return (
-    <div className="flex items-center justify-between py-4 border-b border-gray-100 last:border-0">
-      <div className="flex-1">
+    <div className="flex items-center justify-between gap-4 py-4 border-b border-gray-100 last:border-0">
+      <div className="flex-1 min-w-0">
         <h4 className="font-medium text-gray-900">
           {item.name}
           {item.selectedSize && <span className="text-gray-600 font-normal"> ({item.selectedSize})</span>}
@@ -44,24 +63,33 @@ export function CartItem({ item }: CartItemProps) {
         <p className="text-xs text-gray-400 mt-0.5">GST: A${(gstAmount(item.price ?? 0) * item.quantity).toFixed(2)}</p>
       </div>
 
-      <div className="flex items-center gap-3">
-        <div className="flex items-center border border-gray-200 rounded-md">
+      <div className="flex items-center gap-3 flex-shrink-0">
+        <div
+          className="inline-flex items-center border border-gray-200 rounded-md bg-white"
+          style={{ touchAction: 'manipulation' }}
+          role="group"
+          aria-label="Quantity"
+        >
           <button
-            className="p-1 hover:bg-gray-50 text-gray-600"
-            onClick={() => updateQuantity(item.id, item.quantity - 1, lineKey)}
+            type="button"
+            onClick={handleDecrease}
+            className="shrink-0 w-10 h-10 flex items-center justify-center text-gray-600 hover:bg-gray-100 active:bg-gray-200 rounded-l-md border-0 cursor-pointer select-none"
+            style={{ touchAction: 'manipulation' }}
             aria-label="Decrease quantity"
           >
-            <Minus className="w-4 h-4" />
+            <Minus className="w-4 h-4 pointer-events-none" />
           </button>
-          <span className="w-8 text-center text-sm font-medium">
+          <span className="w-8 text-center text-sm font-medium select-none tabular-nums">
             {item.quantity}
           </span>
           <button
-            className="p-1 hover:bg-gray-50 text-gray-600"
-            onClick={() => updateQuantity(item.id, item.quantity + 1, lineKey)}
+            type="button"
+            onClick={handleIncrease}
+            className="shrink-0 w-10 h-10 flex items-center justify-center text-gray-600 hover:bg-gray-100 active:bg-gray-200 rounded-r-md border-0 cursor-pointer select-none"
+            style={{ touchAction: 'manipulation' }}
             aria-label="Increase quantity"
           >
-            <Plus className="w-4 h-4" />
+            <Plus className="w-4 h-4 pointer-events-none" />
           </button>
         </div>
 
@@ -72,10 +100,11 @@ export function CartItem({ item }: CartItemProps) {
         </div>
 
         <Button
+          type="button"
           variant="ghost"
           size="sm"
           className="text-red-500 hover:text-red-700 hover:bg-red-50 px-2"
-          onClick={() => removeItem(item.id, lineKey, optionsKey)}
+          onClick={(e) => { e.preventDefault(); e.stopPropagation(); removeItem(item.id, lineKey, optionsKey); }}
           aria-label="Remove item"
         >
           <Trash2 className="w-4 h-4" />

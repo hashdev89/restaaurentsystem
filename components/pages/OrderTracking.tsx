@@ -7,7 +7,7 @@ import { Badge } from '../ui/Badge'
 import { Button } from '../ui/Button'
 import { Input } from '../ui/Input'
 import { Order, OrderStatus } from '@/types'
-import { priceInclGst, GST_RATE } from '@/lib/gst'
+import { GST_RATE } from '@/lib/gst'
 import { normalizeOrders, type SupabaseOrderRow } from '@/lib/orders'
 
 const statusSteps: { status: OrderStatus; label: string; icon: React.ReactNode }[] = [
@@ -132,8 +132,7 @@ export function OrderTracking() {
             <div className="space-y-6">
               {orders.map((order) => {
                 const currentStepIndex = getStatusIndex(order.status)
-                const subtotalInclGst = Math.max(0, order.total - 1)
-                const gstIncluded = subtotalInclGst * (GST_RATE / (1 + GST_RATE))
+                const gstFromInclusive = (totalIncl: number) => totalIncl * (GST_RATE / (1 + GST_RATE))
                 return (
                   <Card key={order.id} className="p-6">
                     <div className="flex justify-between items-start mb-6">
@@ -210,14 +209,16 @@ export function OrderTracking() {
                     <div className="bg-gray-50 rounded-lg p-4 mb-4">
                       <h3 className="font-semibold text-gray-900 mb-2">Order Items</h3>
                       <ul className="space-y-2">
-                        {order.items.map((item, idx) => (
+                        {order.items.map((item, idx) => {
+                          const lineTotalInclGst = item.price * item.quantity
+                          return (
                           <li key={idx} className="text-sm">
                             <div className="flex justify-between">
                               <span>
                                 {item.quantity}x {item.name}
                               </span>
                               <span className="text-gray-600">
-                                A${priceInclGst(item.price * item.quantity).toFixed(2)}
+                                A${lineTotalInclGst.toFixed(2)}
                               </span>
                             </div>
                             {item.customizations && item.customizations.length > 0 && (
@@ -236,25 +237,19 @@ export function OrderTracking() {
                               </div>
                             )}
                           </li>
-                        ))}
+                          )
+                        })}
                       </ul>
                       <div className="mt-4 pt-3 border-t border-gray-200 space-y-1">
-                        <div className="flex justify-between text-sm text-gray-600">
-                          <span>Subtotal (incl. GST)</span>
-                          <span>A${subtotalInclGst.toFixed(2)}</span>
-                        </div>
-                        <div className="flex justify-between text-sm text-gray-600">
-                          <span>GST included (10%)</span>
-                          <span>A${gstIncluded.toFixed(2)}</span>
-                        </div>
-                        <div className="flex justify-between text-sm text-gray-600">
-                          <span>Service fee</span>
-                          <span>A$1.00</span>
-                        </div>
-                        <div className="flex justify-between font-semibold text-gray-900 pt-2">
-                          <span>TOTAL</span>
+                        <div className="flex justify-between font-semibold text-gray-900">
+                          <span>Total (Incl. GST)</span>
                           <span>A${order.total.toFixed(2)}</span>
                         </div>
+                        <div className="flex justify-between text-sm text-gray-600">
+                          <span>Total Includes GST of:</span>
+                          <span>A${gstFromInclusive(order.total).toFixed(2)}</span>
+                        </div>
+                        <p className="text-xs text-gray-500 pt-1">All prices include 10% GST</p>
                       </div>
                     </div>
 

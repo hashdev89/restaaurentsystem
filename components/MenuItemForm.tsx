@@ -10,10 +10,15 @@ import { Trash2 } from 'lucide-react'
 
 const DEFAULT_CATEGORIES = ['Starters', 'Mains', 'Desserts', 'Drinks', 'Sides']
 
+/** Per-category options and extras to sync into the form when that category is selected */
+export type CategoryCustomizationsMap = Record<string, { removeOptions: MenuItemCustomizationOption[]; extras: MenuItemCustomizationOption[] }>
+
 interface MenuItemFormProps {
   initialData?: Partial<MenuItem>
   /** When provided, category dropdown uses these options plus "New category...". Otherwise uses default list. */
   categoryOptions?: string[]
+  /** When provided, options and extras for each category are merged into the form when that category is selected. */
+  categoryCustomizationsByCategory?: CategoryCustomizationsMap
   /** When false, hide delete (trash) buttons for remove options and extras. Used by POS so only Restaurant Dashboard can delete. */
   allowDeleteOptions?: boolean
   onSubmit: (data: Partial<MenuItem>) => void
@@ -35,7 +40,7 @@ function getRemoveOptionsAndExtrasFromCustomizations(customizations?: MenuItem['
 const NEW_CATEGORY_VALUE = '__new__'
 const NO_CATEGORY_VALUE = '__none__'
 
-export function MenuItemForm({ initialData, categoryOptions, allowDeleteOptions = true, onSubmit, onCancel }: MenuItemFormProps) {
+export function MenuItemForm({ initialData, categoryOptions, categoryCustomizationsByCategory, allowDeleteOptions = true, onSubmit, onCancel }: MenuItemFormProps) {
   const { removeOptions: initRemove, extras: initExtras } = useMemo(
     () => getRemoveOptionsAndExtrasFromCustomizations(initialData?.customizations),
     [initialData?.customizations]
@@ -82,6 +87,26 @@ export function MenuItemForm({ initialData, categoryOptions, allowDeleteOptions 
     setRemoveOptions(r)
     setExtras(e)
   }, [initialData?.customizations])
+
+  // Sync category-level options and extras into the form when this category has customizations
+  useEffect(() => {
+    const category = formData.category
+    if (!categoryCustomizationsByCategory || !category || category === NEW_CATEGORY_VALUE || category === NO_CATEGORY_VALUE) return
+    const catCustom = categoryCustomizationsByCategory[category]
+    if (!catCustom?.removeOptions?.length && !catCustom?.extras?.length) return
+    setRemoveOptions((prev) => {
+      const names = new Set(prev.map((o) => (o.name ?? '').trim()))
+      const toAdd = (catCustom.removeOptions || []).filter((o) => (o.name ?? '').trim() && !names.has((o.name ?? '').trim()))
+      if (toAdd.length === 0) return prev
+      return [...prev, ...toAdd]
+    })
+    setExtras((prev) => {
+      const names = new Set(prev.map((o) => (o.name ?? '').trim()))
+      const toAdd = (catCustom.extras || []).filter((o) => (o.name ?? '').trim() && !names.has((o.name ?? '').trim()))
+      if (toAdd.length === 0) return prev
+      return [...prev, ...toAdd]
+    })
+  }, [formData.category, categoryCustomizationsByCategory])
   useEffect(() => {
     setSizePrices(defaultSizes)
     setSizesEnabled(Boolean(initialData?.sizes?.length))

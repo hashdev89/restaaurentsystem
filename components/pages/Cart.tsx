@@ -1,17 +1,31 @@
 'use client'
 
+import { useState, useEffect } from 'react'
 import Link from 'next/link'
 import { useRouter } from 'next/navigation'
 import { ArrowLeft, ShoppingBag } from 'lucide-react'
-import { useCart } from '../providers/CartProvider'
+import { useCart, getCartLineKey } from '../providers/CartProvider'
 import { CartItem } from '../CartItem'
 import { Button } from '../ui/Button'
 import { Card } from '../ui/Card'
 import { gstAmount, addGst } from '@/lib/gst'
 
 export function Cart() {
-  const { items, total, itemCount } = useCart()
+  const { items, total } = useCart()
   const router = useRouter()
+  const [onlineCardSurchargePercent, setOnlineCardSurchargePercent] = useState(0)
+
+  useEffect(() => {
+    const restaurantId = items[0]?.restaurantId
+    if (!restaurantId) return
+    fetch(`/api/restaurants/${restaurantId}`)
+      .then((res) => (res.ok ? res.json() : null))
+      .then((data) => {
+        const pct = data?.restaurant?.onlineCardSurchargePercent
+        setOnlineCardSurchargePercent(typeof pct === 'number' && pct >= 0 ? pct : 0)
+      })
+      .catch(() => setOnlineCardSurchargePercent(0))
+  }, [items])
 
   if (items.length === 0) {
     return (
@@ -41,12 +55,12 @@ export function Cart() {
         </div>
 
         <div className="grid grid-cols-1 lg:grid-cols-3 gap-8 w-full">
-          {/* Cart Items List */}
-          <div className="lg:col-span-2 min-w-0">
-            <Card className="mb-6 lg:mb-0">
-              <div className="divide-y divide-gray-100">
-                {items.map((item) => (
-                  <CartItem key={item.id} item={item} />
+          {/* Cart Items List - relative z-10 so quantity buttons are never covered */}
+          <div className="lg:col-span-2 min-w-0 relative z-10">
+            <Card className="mb-6 lg:mb-0 overflow-visible">
+              <div className="divide-y divide-gray-100 relative">
+                {items.map((item, index) => (
+                  <CartItem key={`${item.id}-${item.selectedSize ?? ''}-${getCartLineKey(item)}-${index}`} item={item} />
                 ))}
               </div>
             </Card>
@@ -68,23 +82,38 @@ export function Cart() {
                   ))}
                 </ul>
               </div>
-              <div className="space-y-3 mb-6">
-                <div className="flex justify-between text-gray-600">
-                  <span>Subtotal (incl. GST) — {itemCount} items</span>
-                  <span>A${addGst(total).toFixed(2)}</span>
-                </div>
-                <div className="flex justify-between text-gray-600">
+              <div className="space-y-2 mb-4">
+                <h3 className="text-sm font-medium text-gray-700 pt-2 border-t border-gray-200">Bill breakdown</h3>
+                <div className="flex justify-between text-gray-600 text-sm">
                   <span>GST included (10%)</span>
                   <span>A${gstAmount(total).toFixed(2)}</span>
                 </div>
-                <div className="flex justify-between text-gray-600">
+                <div className="flex justify-between text-gray-600 text-sm">
                   <span>Service fee</span>
                   <span>A$1.00</span>
                 </div>
-                <div className="border-t border-gray-200 pt-3 flex justify-between font-bold text-lg text-gray-900">
-                  <span>TOTAL</span>
+                <div className="flex justify-between font-semibold text-gray-900 pt-2 border-t border-gray-200">
+                  <span>Total</span>
                   <span>A${(addGst(total) + 1).toFixed(2)}</span>
                 </div>
+                {onlineCardSurchargePercent > 0 && (
+                  <>
+                    <div className="flex justify-between text-gray-600 text-sm">
+                      <span>Card surcharge ({onlineCardSurchargePercent}%) if paying by card</span>
+                      <span>A${( (addGst(total) + 1) * (onlineCardSurchargePercent / 100) ).toFixed(2)}</span>
+                    </div>
+                    <div className="flex justify-between font-bold text-lg text-gray-900 pt-2 border-t-2 border-gray-300">
+                      <span>Grand Total (if card)</span>
+                      <span>A${( (addGst(total) + 1) * (1 + onlineCardSurchargePercent / 100) ).toFixed(2)}</span>
+                    </div>
+                  </>
+                )}
+                {onlineCardSurchargePercent <= 0 && (
+                  <div className="flex justify-between font-bold text-lg text-gray-900 pt-2 border-t-2 border-gray-300">
+                    <span>Grand Total</span>
+                    <span>A${(addGst(total) + 1).toFixed(2)}</span>
+                  </div>
+                )}
               </div>
 
               <Button

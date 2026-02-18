@@ -25,6 +25,8 @@ type RestaurantRow = {
   public_holiday_surcharge_percent?: number | null
   public_holiday_dates?: unknown
   surcharge_manual_override?: string | null
+  online_card_surcharge_percent?: number | null
+  pos_card_surcharge_percent?: number | null
   created_at?: string
   updated_at?: string
 }
@@ -57,6 +59,8 @@ function toRestaurant(row: RestaurantRow) {
     publicHolidaySurchargePercent: row.public_holiday_surcharge_percent != null ? Number(row.public_holiday_surcharge_percent) : 0,
     publicHolidayDates: holidayDates,
     surchargeManualOverride: (row.surcharge_manual_override === 'sunday' || row.surcharge_manual_override === 'public_holiday' || row.surcharge_manual_override === 'none') ? row.surcharge_manual_override : 'auto',
+    onlineCardSurchargePercent: row.online_card_surcharge_percent != null ? Number(row.online_card_surcharge_percent) : 0,
+    posCardSurchargePercent: row.pos_card_surcharge_percent != null ? Number(row.pos_card_surcharge_percent) : 0,
   }
 }
 

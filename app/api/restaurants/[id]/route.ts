@@ -24,6 +24,8 @@ type RestaurantRow = {
   public_holiday_surcharge_percent?: number | null
   public_holiday_dates?: unknown
   surcharge_manual_override?: string | null
+  online_card_surcharge_percent?: number | null
+  pos_card_surcharge_percent?: number | null
 }
 
 function toRestaurant(row: RestaurantRow) {
@@ -53,6 +55,8 @@ function toRestaurant(row: RestaurantRow) {
     publicHolidaySurchargePercent: row.public_holiday_surcharge_percent != null ? Number(row.public_holiday_surcharge_percent) : 0,
     publicHolidayDates: holidayDates,
     surchargeManualOverride: (row.surcharge_manual_override === 'sunday' || row.surcharge_manual_override === 'public_holiday' || row.surcharge_manual_override === 'none') ? row.surcharge_manual_override : 'auto',
+    onlineCardSurchargePercent: row.online_card_surcharge_percent != null ? Number(row.online_card_surcharge_percent) : 0,
+    posCardSurchargePercent: row.pos_card_surcharge_percent != null ? Number(row.pos_card_surcharge_percent) : 0,
   }
 }
 
@@ -110,6 +114,12 @@ export async function PATCH(
     if (Array.isArray(body.publicHolidayDates)) updates.public_holiday_dates = body.publicHolidayDates
     if (body.surchargeManualOverride === 'auto' || body.surchargeManualOverride === 'sunday' || body.surchargeManualOverride === 'public_holiday' || body.surchargeManualOverride === 'none') {
       updates.surcharge_manual_override = body.surchargeManualOverride
+    }
+    if (typeof body.onlineCardSurchargePercent === 'number' && body.onlineCardSurchargePercent >= 0) {
+      updates.online_card_surcharge_percent = body.onlineCardSurchargePercent
+    }
+    if (typeof body.posCardSurchargePercent === 'number' && body.posCardSurchargePercent >= 0) {
+      updates.pos_card_surcharge_percent = body.posCardSurchargePercent
     }
 
     if (Object.keys(updates).length === 0) {

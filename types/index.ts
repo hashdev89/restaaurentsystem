@@ -42,6 +42,10 @@ export interface Restaurant {
   publicHolidayDates?: string[];
   /** Override for today: 'auto' | 'sunday' | 'public_holiday' | 'none'. */
   surchargeManualOverride?: 'auto' | 'sunday' | 'public_holiday' | 'none';
+  /** Card payment surcharge for online (customer) card payments, percentage (e.g. 1.5). */
+  onlineCardSurchargePercent?: number;
+  /** Card payment surcharge for POS card payments, percentage (e.g. 1.5). */
+  posCardSurchargePercent?: number;
 }
 
 export type SeatStatus = 'available' | 'reserved' | 'occupied' | 'maintenance';

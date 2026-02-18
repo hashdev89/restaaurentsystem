@@ -1,12 +1,15 @@
 'use client'
 
 import { useState, useEffect, useCallback, useMemo, useRef } from 'react'
-import { 
-  Search, 
-  ShoppingCart, 
-  CreditCard, 
-  X, 
-  Plus, 
+import { useRouter, useSearchParams } from 'next/navigation'
+import { loadStripe } from '@stripe/stripe-js'
+import { Elements, PaymentElement, useStripe, useElements } from '@stripe/react-stripe-js'
+import {
+  Search,
+  ShoppingCart,
+  CreditCard,
+  X,
+  Plus,
   Minus,
   Coffee,
   UtensilsCrossed,
@@ -647,7 +650,77 @@ function buildCategoriesFromMenuItems(items: { id: string; name: string; descrip
   }))
 }
 
+const stripePublishableKey = process.env.NEXT_PUBLIC_STRIPE_PUBLISHABLE_KEY || ''
+const posStripePromise = stripePublishableKey ? loadStripe(stripePublishableKey) : null
+
+const UUID_REGEX = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i
+function toOrderUuid(value: string | undefined): string | null {
+  const s = (value ?? '').trim()
+  if (!s) return null
+  if (UUID_REGEX.test(s)) return s
+  const uuidPart = s.slice(0, 36)
+  if (UUID_REGEX.test(uuidPart)) return uuidPart
+  return null
+}
+
+type POSStripePayFormProps = {
+  orderId: string
+  paymentIntentId: string
+  amountDisplay: string
+  onSuccess: () => void
+  onError: (message: string) => void
+}
+
+function POSStripePayForm({ orderId, paymentIntentId, amountDisplay, onSuccess, onError }: POSStripePayFormProps) {
+  const stripe = useStripe()
+  const elements = useElements()
+  const [isConfirming, setIsConfirming] = useState(false)
+
+  const handlePay = async (e: React.FormEvent) => {
+    e.preventDefault()
+    if (!stripe || !elements) return
+    setIsConfirming(true)
+    try {
+      const returnUrl = `${typeof window !== 'undefined' ? window.location.origin : ''}${typeof window !== 'undefined' ? window.location.pathname : '/pos'}?posOrderId=${encodeURIComponent(orderId)}`
+      const { error } = await stripe.confirmPayment({
+        elements,
+        confirmParams: { return_url: returnUrl, receipt_email: undefined }
+      })
+      if (error) {
+        onError(error.message || 'Payment failed')
+        return
+      }
+      const res = await fetch('/api/stripe/confirm-payment', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ orderId, paymentIntentId })
+      })
+      if (!res.ok) {
+        const data = await res.json().catch(() => ({}))
+        onError(data.error || 'Could not confirm payment')
+        return
+      }
+      onSuccess()
+    } catch (err) {
+      onError(err instanceof Error ? err.message : 'Payment failed')
+    } finally {
+      setIsConfirming(false)
+    }
+  }
+
+  return (
+    <form onSubmit={handlePay} className="space-y-4">
+      <PaymentElement options={{ layout: 'tabs', paymentMethodOrder: ['card', 'link'] }} />
+      <Button type="submit" size="lg" className="w-full" isLoading={isConfirming} disabled={!stripe || isConfirming}>
+        {isConfirming ? 'Processing...' : `Pay ${amountDisplay}`}
+      </Button>
+    </form>
+  )
+}
+
 export function POSSystem({ restaurantId: restaurantIdProp }: { restaurantId?: string }) {
+  const router = useRouter()
+  const searchParams = useSearchParams()
   const { success, warning } = useNotification()
   // State
   const [cart, setCart] = useState<CartItem[]>([])
@@ -698,6 +771,12 @@ export function POSSystem({ restaurantId: restaurantIdProp }: { restaurantId?: s
   const barcodeInputRef = useRef<HTMLInputElement>(null)
   /** When set, cart was loaded from a ready order; completing payment will PATCH this order to completed instead of creating a new order */
   const [orderIdForBilling, setOrderIdForBilling] = useState<string | null>(null)
+  /** Card payment via Stripe: 'method' = choose payment type, 'card-form' = show Stripe Payment Element */
+  const [paymentStep, setPaymentStep] = useState<'method' | 'card-form'>('method')
+  const [stripeClientSecret, setStripeClientSecret] = useState<string | null>(null)
+  const [stripeOrderId, setStripeOrderId] = useState<string | null>(null)
+  const [stripePaymentIntentId, setStripePaymentIntentId] = useState<string | null>(null)
+  const [stripeOrderNumber, setStripeOrderNumber] = useState<number>(0)
   // Categories state so we can add/edit/delete items (initialized from POS_CATEGORIES)
   const [categories, setCategories] = useState<POSCategory[]>(() =>
     POS_CATEGORIES.map(cat => ({ ...cat, subItems: cat.subItems.map(s => ({ ...s })) }))
@@ -709,7 +788,7 @@ export function POSSystem({ restaurantId: restaurantIdProp }: { restaurantId?: s
   const [posPinInput, setPosPinInput] = useState('')
   const [posPinError, setPosPinError] = useState('')
 
-  // Surcharge settings from Restaurant Dashboard (Sunday / public holiday)
+  // Surcharge settings from Restaurant Dashboard (Sunday / public holiday / card)
   const [posSurcharge, setPosSurcharge] = useState<{
     sundaySurchargeEnabled: boolean
     sundaySurchargePercent: number
@@ -717,6 +796,7 @@ export function POSSystem({ restaurantId: restaurantIdProp }: { restaurantId?: s
     publicHolidaySurchargePercent: number
     publicHolidayDates: string[]
     surchargeManualOverride: 'auto' | 'sunday' | 'public_holiday' | 'none'
+    posCardSurchargePercent: number
   }>({
     sundaySurchargeEnabled: false,
     sundaySurchargePercent: 0,
@@ -724,6 +804,7 @@ export function POSSystem({ restaurantId: restaurantIdProp }: { restaurantId?: s
     publicHolidaySurchargePercent: 0,
     publicHolidayDates: [],
     surchargeManualOverride: 'auto',
+    posCardSurchargePercent: 0,
   })
 
   // When linked to a restaurant (e.g. /restaurant/[id]/pos), use that restaurant and load menu from API
@@ -763,6 +844,7 @@ export function POSSystem({ restaurantId: restaurantIdProp }: { restaurantId?: s
               publicHolidaySurchargePercent: Number(r.publicHolidaySurchargePercent) || 0,
               publicHolidayDates: Array.isArray(r.publicHolidayDates) ? r.publicHolidayDates : [],
               surchargeManualOverride: r.surchargeManualOverride === 'sunday' || r.surchargeManualOverride === 'public_holiday' || r.surchargeManualOverride === 'none' ? r.surchargeManualOverride : 'auto',
+              posCardSurchargePercent: Number(r.posCardSurchargePercent) ?? 0,
             })
           }
         })
@@ -802,6 +884,7 @@ export function POSSystem({ restaurantId: restaurantIdProp }: { restaurantId?: s
             publicHolidaySurchargePercent: Number(r.publicHolidaySurchargePercent) || 0,
             publicHolidayDates: Array.isArray(r.publicHolidayDates) ? r.publicHolidayDates : [],
             surchargeManualOverride: r.surchargeManualOverride === 'sunday' || r.surchargeManualOverride === 'public_holiday' || r.surchargeManualOverride === 'none' ? r.surchargeManualOverride : 'auto',
+            posCardSurchargePercent: Number(r.posCardSurchargePercent) ?? 0,
           })
         }
       })
@@ -829,6 +912,29 @@ export function POSSystem({ restaurantId: restaurantIdProp }: { restaurantId?: s
       setPendingOrdersLoading(false)
     }
   }, [defaultRestaurantId])
+
+  // Handle redirect back from Stripe (e.g. after 3DS): confirm payment and clear URL
+  const stripePosRedirectDone = useRef(false)
+  useEffect(() => {
+    const posOrderId = searchParams.get('posOrderId')
+    const paymentIntent = searchParams.get('payment_intent')
+    const redirectStatus = searchParams.get('redirect_status')
+    if (!posOrderId || !paymentIntent || redirectStatus !== 'succeeded' || stripePosRedirectDone.current) return
+    stripePosRedirectDone.current = true
+    fetch('/api/stripe/confirm-payment', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ orderId: posOrderId, paymentIntentId: paymentIntent })
+    })
+      .then(() => {
+        success('Payment complete', 'Card payment confirmed. Order has been completed.')
+        fetchPendingOrders()
+      })
+      .catch(() => { /* ignore */ })
+      .finally(() => {
+        router.replace(window.location.pathname, { scroll: false })
+      })
+  }, [searchParams, success, router, fetchPendingOrders])
 
   useEffect(() => {
     if (activeSection !== 'orders' || !defaultRestaurantId) return
@@ -914,8 +1020,16 @@ export function POSSystem({ restaurantId: restaurantIdProp }: { restaurantId?: s
     return subtotalAfterDiscount * (surchargeApplied.percent / 100)
   }, [surchargeApplied, subtotalAfterDiscount])
 
+  const totalBeforeCardSurcharge = subtotalAfterDiscount + surchargeAmount
+  const posCardSurchargeAmount = useMemo(() => {
+    const pct = posSurcharge.posCardSurchargePercent ?? 0
+    if (pct <= 0) return 0
+    if (paymentMethod !== 'card' && paymentMethod !== 'mix') return 0
+    return totalBeforeCardSurcharge * (pct / 100)
+  }, [posSurcharge.posCardSurchargePercent, paymentMethod, totalBeforeCardSurcharge])
+
   const total = useMemo(() => 
-    subtotalAfterDiscount + surchargeAmount, [subtotalAfterDiscount, surchargeAmount]
+    totalBeforeCardSurcharge + posCardSurchargeAmount, [totalBeforeCardSurcharge, posCardSurchargeAmount]
   )
 
   // Quick add to cart (no customization) - increments quantity if item exists
@@ -1413,10 +1527,6 @@ export function POSSystem({ restaurantId: restaurantIdProp }: { restaurantId?: s
 
     <div class="divider">------------------------------------------</div>
     <div class="totals">
-      <div class="total-row">
-        <span>Subtotal (incl. GST)</span>
-        <span>A$${subtotalInclGst.toFixed(2)}</span>
-      </div>
       <div class="total-row gst">
         <span>GST included (10%)</span>
         <span>A$${totalGst.toFixed(2)}</span>
@@ -1433,6 +1543,16 @@ export function POSSystem({ restaurantId: restaurantIdProp }: { restaurantId?: s
         <span>A$${surchargeAmount.toFixed(2)}</span>
       </div>
       ` : ''}
+      <div class="total-row" style="font-weight: bold; margin-top: 8px;">
+        <span>Total</span>
+        <span>A$${totalBeforeCardSurcharge.toFixed(2)}</span>
+      </div>
+      ${(paymentMethod === 'card' || paymentMethod === 'mix') && posCardSurchargeAmount > 0 ? `
+      <div class="total-row">
+        <span>Card payment surcharge:</span>
+        <span>A$${posCardSurchargeAmount.toFixed(2)}</span>
+      </div>
+      ` : ''}
       ${tip > 0 ? `
       <div class="total-row">
         <span>Tip${tipPercentage ? ` (${tipPercentage}%)` : ''}:</span>
@@ -1440,7 +1560,7 @@ export function POSSystem({ restaurantId: restaurantIdProp }: { restaurantId?: s
       </div>
       ` : ''}
       <div class="total-row final">
-        <span>TOTAL</span>
+        <span>GRAND TOTAL</span>
         <span>A$${total.toFixed(2)}</span>
       </div>
     </div>
@@ -1520,7 +1640,120 @@ export function POSSystem({ restaurantId: restaurantIdProp }: { restaurantId?: s
       // receiptWindow.close()
     }, 250)
     // eslint-disable-next-line react-hooks/exhaustive-deps -- receipt template uses all listed deps
-  }, [cart, orderNumber, orderType, tableNumber, customerName, subtotalExGst, totalGst, subtotalInclGst, discount, discountAmount, tip, tipPercentage, total, paymentMethod, orderNotes, cashTendered, mixCardAmount, mixCashAmount, surchargeAmount, surchargeApplied])
+  }, [cart, orderNumber, orderType, tableNumber, customerName, subtotalExGst, totalGst, subtotalInclGst, discount, discountAmount, tip, tipPercentage, total, totalBeforeCardSurcharge, paymentMethod, orderNotes, cashTendered, mixCardAmount, mixCashAmount, surchargeAmount, surchargeApplied, posCardSurchargeAmount])
+
+  const handleStartCardPayment = async () => {
+    if (cart.length === 0 || !posStripePromise) return
+    const rid = defaultRestaurantId || (typeof process !== 'undefined' && process.env ? process.env.NEXT_PUBLIC_DEFAULT_RESTAURANT_ID : '') || ''
+    if (!rid) {
+      warning('No restaurant', 'Select a restaurant or set default.')
+      return
+    }
+    setIsProcessing(true)
+    try {
+      const orderResponse = await fetch('/api/orders', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          restaurantId: rid,
+          customerName: customerName?.trim() || (orderType === 'dine-in' ? `Table ${tableNumber}` : 'Walk-in'),
+          customerEmail: 'pos@restaurant.local',
+          customerPhone: 'N/A',
+          items: cart.map((item) => ({
+            menuItemId: item.id,
+            name: item.name,
+            quantity: item.quantity,
+            price: item.finalPrice,
+            customizations: item.customizations
+          })),
+          total,
+          status: 'pending',
+          orderType,
+          tableNumber: orderType === 'dine-in' ? tableNumber : null,
+          paymentStatus: 'pending'
+        })
+      })
+      if (!orderResponse.ok) {
+        const errData = await orderResponse.json().catch(() => ({}))
+        throw new Error(errData?.error || `Order failed: ${orderResponse.status}`)
+      }
+      const orderData = await orderResponse.json()
+      const rawOrderId = orderData.orderId ?? orderData.order?.id
+      const orderId = toOrderUuid(rawOrderId)
+      if (!orderId) throw new Error('No valid order ID returned from server')
+      const amountInCents = Math.round(total * 100)
+      const piRes = await fetch('/api/stripe/create-payment-intent', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ amountInCents, orderId, currency: 'aud' })
+      })
+      if (!piRes.ok) {
+        const piErr = await piRes.json().catch(() => ({}))
+        throw new Error(piErr?.error || 'Failed to create payment')
+      }
+      const { clientSecret, paymentIntentId } = await piRes.json()
+      setStripeClientSecret(clientSecret)
+      setStripeOrderId(orderId)
+      setStripePaymentIntentId(paymentIntentId)
+      setStripeOrderNumber(orderNumber)
+      setPaymentStep('card-form')
+    } catch (e) {
+      warning('Card payment', e instanceof Error ? e.message : 'Could not start card payment.')
+    } finally {
+      setIsProcessing(false)
+    }
+  }
+
+  const handleCardPaymentSuccess = useCallback(() => {
+    if (!stripeOrderId || !stripeOrderNumber) return
+    printReceipt()
+    setOrders(prev => [{
+      id: stripeOrderId,
+      orderNumber: stripeOrderNumber,
+      items: cart,
+      total,
+      subtotalExGst,
+      totalGst,
+      discount,
+      tip,
+      paymentMethod: 'card',
+      paymentStatus: 'captured',
+      orderType,
+      tableNumber,
+      customerName,
+      createdAt: new Date().toISOString(),
+      status: 'completed'
+    }, ...prev])
+    setTransactions(prev => [{
+      id: `txn-${Date.now()}`,
+      orderId: stripeOrderId,
+      orderNumber: stripeOrderNumber,
+      amount: total,
+      paymentMethod: 'card',
+      paymentStatus: 'captured',
+      createdAt: new Date().toISOString(),
+      items: cart.length
+    }, ...prev])
+    setTimeout(() => printReceipt(), 500)
+    success('Payment complete', `Order #${stripeOrderNumber} paid by card.`)
+    setCart([])
+    setTableNumber('')
+    setCustomerName('')
+    setOrderNotes('')
+    setDiscount(null)
+    setTip(0)
+    setTipPercentage(null)
+    setOrderNumber(prev => prev + 1)
+    setShowPaymentModal(false)
+    setPaymentStep('method')
+    setStripeClientSecret(null)
+    setStripeOrderId(null)
+    setStripePaymentIntentId(null)
+    setStripeOrderNumber(0)
+    setPaymentMethod('card')
+    setMixCardAmount('')
+    setMixCashAmount('')
+  }, [stripeOrderId, stripeOrderNumber, cart, total, subtotalExGst, totalGst, discount, tip, orderType, tableNumber, customerName, printReceipt, success])
 
   const handlePayment = async () => {
     if (cart.length === 0) return
@@ -2235,31 +2468,36 @@ export function POSSystem({ restaurantId: restaurantIdProp }: { restaurantId?: s
                       <p className="font-semibold text-gray-900 text-sm min-w-0 flex-1 truncate" title={item.name}>
                         {item.name}{item.selectedSize ? ` (${item.selectedSize})` : ''}
                       </p>
-                      <div className="flex items-center gap-1 flex-shrink-0">
+                      <div className="flex items-center gap-1 flex-shrink-0 relative z-10">
                         <button
-                          onClick={() => updateQuantity(item.id, item.quantity - 1)}
-                          className="w-8 h-8 rounded-lg bg-gray-100 hover:bg-gray-200 flex items-center justify-center transition-colors active:scale-95"
+                          type="button"
+                          onClick={(e) => { e.preventDefault(); e.stopPropagation(); updateQuantity(item.id, item.quantity - 1); }}
+                          className="w-8 h-8 rounded-lg bg-gray-100 hover:bg-gray-200 flex items-center justify-center transition-colors active:scale-95 cursor-pointer touch-manipulation select-none"
+                          aria-label="Decrease quantity"
                         >
-                          <Minus className="w-4 h-4" />
+                          <Minus className="w-4 h-4 pointer-events-none" />
                         </button>
                         <span className="w-7 text-center font-bold text-sm tabular-nums">{item.quantity}</span>
                         <button
-                          onClick={() => updateQuantity(item.id, item.quantity + 1)}
-                          className="w-8 h-8 rounded-lg bg-gray-100 hover:bg-gray-200 flex items-center justify-center transition-colors active:scale-95"
+                          type="button"
+                          onClick={(e) => { e.preventDefault(); e.stopPropagation(); updateQuantity(item.id, item.quantity + 1); }}
+                          className="w-8 h-8 rounded-lg bg-gray-100 hover:bg-gray-200 flex items-center justify-center transition-colors active:scale-95 cursor-pointer touch-manipulation select-none"
+                          aria-label="Increase quantity"
                         >
-                          <Plus className="w-4 h-4" />
+                          <Plus className="w-4 h-4 pointer-events-none" />
                         </button>
                       </div>
                       <p className="font-bold text-orange-600 text-sm tabular-nums w-16 text-right flex-shrink-0">
                         A${(item.finalPrice * item.quantity).toFixed(2)}
                       </p>
                       <button
-                        onClick={() => removeFromCart(item.id)}
-                        className="w-9 h-9 rounded-lg flex items-center justify-center flex-shrink-0 text-red-500 hover:text-white hover:bg-red-500 border-2 border-red-200 bg-red-50 transition-colors active:scale-95"
+                        type="button"
+                        onClick={(e) => { e.preventDefault(); e.stopPropagation(); removeFromCart(item.id); }}
+                        className="w-9 h-9 rounded-lg flex items-center justify-center flex-shrink-0 text-red-500 hover:text-white hover:bg-red-500 border-2 border-red-200 bg-red-50 transition-colors active:scale-95 cursor-pointer touch-manipulation relative z-10"
                         title="Remove"
                         aria-label="Remove"
                       >
-                        <X className="w-5 h-5 stroke-[2.5]" />
+                        <X className="w-5 h-5 stroke-[2.5] pointer-events-none" />
                       </button>
                     </div>
                     {item.customizations.length > 0 && (
@@ -3044,12 +3282,57 @@ export function POSSystem({ restaurantId: restaurantIdProp }: { restaurantId?: s
       </Dialog>
 
       {/* Payment Modal */}
-      <Dialog open={showPaymentModal} onOpenChange={(open) => { setShowPaymentModal(open); if (!open) setCashTendered('') }}>
+      <Dialog
+        open={showPaymentModal}
+        onOpenChange={(open) => {
+          setShowPaymentModal(open)
+          if (!open) {
+            setCashTendered('')
+            setPaymentStep('method')
+            setStripeClientSecret(null)
+            setStripeOrderId(null)
+            setStripePaymentIntentId(null)
+            setStripeOrderNumber(0)
+          }
+        }}
+      >
         <DialogContent
-          title="Select Payment Method"
-          onClose={() => { setShowPaymentModal(false); setCashTendered('') }}
+          title={paymentStep === 'card-form' ? 'Pay with card' : 'Select Payment Method'}
+          className="max-w-md max-h-[90vh] overflow-y-auto"
+          onClose={() => {
+            setShowPaymentModal(false)
+            setCashTendered('')
+            setPaymentStep('method')
+            setStripeClientSecret(null)
+            setStripeOrderId(null)
+            setStripePaymentIntentId(null)
+            setStripeOrderNumber(0)
+          }}
         >
           <div className="space-y-4">
+            {paymentStep === 'card-form' && posStripePromise && stripeClientSecret && stripeOrderId && stripePaymentIntentId ? (
+              <div className="space-y-4">
+                <div className="flex justify-between items-center">
+                  <p className="text-sm text-gray-600">
+                    Pay with your card.
+                  </p>
+                  <Button type="button" variant="secondary" size="sm" onClick={() => { setPaymentStep('method'); setStripeClientSecret(null); setStripeOrderId(null); setStripePaymentIntentId(null); setStripeOrderNumber(0) }}>
+                    <ArrowLeft className="w-4 h-4 mr-1" /> Back
+                  </Button>
+                </div>
+                <p className="text-xs text-gray-500">Total: <strong className="text-orange-600">A${total.toFixed(2)}</strong></p>
+                <Elements key={stripePaymentIntentId} stripe={posStripePromise} options={{ clientSecret: stripeClientSecret, appearance: { theme: 'stripe' } }}>
+                  <POSStripePayForm
+                    orderId={stripeOrderId}
+                    paymentIntentId={stripePaymentIntentId}
+                    amountDisplay={`A$${total.toFixed(2)}`}
+                    onSuccess={handleCardPaymentSuccess}
+                    onError={(msg) => warning('Payment failed', msg)}
+                  />
+                </Elements>
+              </div>
+            ) : (
+              <>
             {/* Order type: Pickup / Dine In / Delivery (no table number) */}
             <div>
               <label className="block text-sm font-medium text-gray-700 mb-2">Order type</label>
@@ -3147,10 +3430,7 @@ export function POSSystem({ restaurantId: restaurantIdProp }: { restaurantId?: s
 
             <div className="bg-gray-50 rounded-lg p-4">
               <div className="space-y-2">
-                <div className="flex justify-between text-sm text-gray-600">
-                  <span>Subtotal (incl. GST)</span>
-                  <span>A${subtotalInclGst.toFixed(2)}</span>
-                </div>
+                <h3 className="text-xs font-semibold text-gray-500 uppercase tracking-wide pb-1">Order summary</h3>
                 <div className="flex justify-between text-sm text-gray-600">
                   <span>GST included (10%)</span>
                   <span>A${totalGst.toFixed(2)}</span>
@@ -3167,10 +3447,28 @@ export function POSSystem({ restaurantId: restaurantIdProp }: { restaurantId?: s
                     <span>A${surchargeAmount.toFixed(2)}</span>
                   </div>
                 )}
-                <div className="flex justify-between text-xl font-bold text-gray-900 pt-2 border-t-2 border-gray-300">
-                  <span>TOTAL</span>
-                  <span className="text-orange-600">A${total.toFixed(2)}</span>
+                <div className="flex justify-between font-semibold text-gray-900 pt-2 border-t border-gray-300">
+                  <span>Total</span>
+                  <span>A${totalBeforeCardSurcharge.toFixed(2)}</span>
                 </div>
+                {(paymentMethod === 'card' || paymentMethod === 'mix') && posCardSurchargeAmount > 0 && (
+                  <>
+                    <div className="flex justify-between text-sm text-gray-600">
+                      <span>Card payment surcharge</span>
+                      <span>A${posCardSurchargeAmount.toFixed(2)}</span>
+                    </div>
+                    <div className="flex justify-between text-xl font-bold text-gray-900 pt-2 border-t-2 border-gray-300">
+                      <span>Grand Total</span>
+                      <span className="text-orange-600">A${total.toFixed(2)}</span>
+                    </div>
+                  </>
+                )}
+                {!((paymentMethod === 'card' || paymentMethod === 'mix') && posCardSurchargeAmount > 0) && (
+                  <div className="flex justify-between text-xl font-bold text-gray-900 pt-2 border-t-2 border-gray-300">
+                    <span>Grand Total</span>
+                    <span className="text-orange-600">A${total.toFixed(2)}</span>
+                  </div>
+                )}
               </div>
             </div>
 
@@ -3328,19 +3626,31 @@ export function POSSystem({ restaurantId: restaurantIdProp }: { restaurantId?: s
             )}
 
             <Button
-              onClick={handlePayment}
+              onClick={paymentMethod === 'card' ? handleStartCardPayment : handlePayment}
               variant="primary"
               size="lg"
               className="w-full h-14 text-lg font-bold"
-              disabled={isProcessing || (paymentMethod === 'mix' && (() => {
-                const card = parseFloat(mixCardAmount) || 0
-                const cash = parseFloat(mixCashAmount) || 0
-                return Math.abs((card + cash) - total) >= 0.01 || card < 0 || cash < 0
-              })())}
+              disabled={
+                isProcessing ||
+                (paymentMethod === 'card' && !posStripePromise) ||
+                (paymentMethod === 'mix' && (() => {
+                  const card = parseFloat(mixCardAmount) || 0
+                  const cash = parseFloat(mixCashAmount) || 0
+                  return Math.abs((card + cash) - total) >= 0.01 || card < 0 || cash < 0
+                })())
+              }
               isLoading={isProcessing}
             >
-              {isProcessing ? 'Processing...' : paymentMethod === 'mix' ? 'Process Mix Payment' : `Process ${paymentMethod === 'card' ? 'Card' : 'Cash'} Payment`}
+              {isProcessing
+                ? 'Processing...'
+                : paymentMethod === 'card'
+                  ? (posStripePromise ? 'Continue to card payment' : 'Card (Stripe not configured)')
+                  : paymentMethod === 'mix'
+                    ? 'Process Mix Payment'
+                    : 'Process Cash Payment'}
             </Button>
+              </>
+            )}
           </div>
         </DialogContent>
       </Dialog>
@@ -3542,7 +3852,7 @@ export function POSSystem({ restaurantId: restaurantIdProp }: { restaurantId?: s
           </div>
         </div>
 
-        {/* Right 35%: Pay button (with total) left, Subtotal/GST stacked right */}
+        {/* Right 35%: Pay button (with total) left, Order summary stacked right */}
         <div className="w-[35%] min-w-[280px] flex-shrink-0 flex items-center justify-between gap-3 sm:gap-4 px-4 py-3 bg-gray-50">
           <Button
             onClick={() => setShowPaymentModal(true)}
@@ -3554,14 +3864,19 @@ export function POSSystem({ restaurantId: restaurantIdProp }: { restaurantId?: s
             <span>Pay A${total.toFixed(2)}</span>
           </Button>
           <div className="text-right flex flex-col gap-1 min-w-0">
-            <p className="text-sm sm:text-base text-gray-700 font-medium">Subtotal (incl. GST): A${subtotalInclGst.toFixed(2)}</p>
-            <p className="text-sm sm:text-base text-gray-700 font-medium">GST (10%): A${totalGst.toFixed(2)}</p>
+            <p className="text-xs font-semibold text-gray-500 uppercase">Order summary</p>
+            <p className="text-sm text-gray-700">GST (10%): A${totalGst.toFixed(2)}</p>
             {discount && (
               <p className="text-sm text-green-600 font-medium">Discount: -A${discountAmount.toFixed(2)}</p>
             )}
             {surchargeApplied && (
               <p className="text-sm text-gray-600">{surchargeApplied.label}: A${surchargeAmount.toFixed(2)}</p>
             )}
+            <p className="text-sm font-semibold text-gray-900">Total: A${totalBeforeCardSurcharge.toFixed(2)}</p>
+            {(paymentMethod === 'card' || paymentMethod === 'mix') && posCardSurchargeAmount > 0 && (
+              <p className="text-sm text-gray-600">Card surcharge: A${posCardSurchargeAmount.toFixed(2)}</p>
+            )}
+            <p className="text-base font-bold text-orange-600">Grand Total: A${total.toFixed(2)}</p>
           </div>
         </div>
       </div>

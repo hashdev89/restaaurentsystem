@@ -1,3 +1,4 @@
+import { Suspense } from 'react'
 import { POSSystem } from '@/components/pages/POSSystem'
 
 export default function RestaurantPOSPage({
@@ -5,5 +6,9 @@ export default function RestaurantPOSPage({
 }: {
   params: { restaurantId: string }
 }) {
-  return <POSSystem restaurantId={params.restaurantId} />
+  return (
+    <Suspense fallback={<div className="flex min-h-screen items-center justify-center text-gray-500">Loading POS...</div>}>
+      <POSSystem restaurantId={params.restaurantId} />
+    </Suspense>
+  )
 }

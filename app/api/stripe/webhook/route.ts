@@ -4,6 +4,16 @@ import Stripe from 'stripe'
 import { getStripe } from '@/lib/stripe'
 import { supabase } from '@/lib/supabase'
 
+const UUID_REGEX = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i
+function toOrderUuid(value: string | undefined): string | null {
+  const s = (value ?? '').trim()
+  if (!s) return null
+  if (UUID_REGEX.test(s)) return s
+  const uuidPart = s.slice(0, 36)
+  if (UUID_REGEX.test(uuidPart)) return uuidPart
+  return null
+}
+
 /**
  * Stripe webhook: mark order as paid when payment_intent.succeeded.
  * Set STRIPE_WEBHOOK_SECRET in .env and run: stripe listen --forward-to localhost:3000/api/stripe/webhook
@@ -37,8 +47,9 @@ export async function POST(request: NextRequest) {
 
   if (event.type === 'payment_intent.succeeded') {
     const paymentIntent = event.data.object as Stripe.PaymentIntent
-    const orderId = paymentIntent.metadata?.orderId
-    if (orderId) {
+    const rawOrderId = paymentIntent.metadata?.orderId as string | undefined
+    const orderUuid = toOrderUuid(rawOrderId)
+    if (orderUuid) {
       const { error } = await supabase
         .from('orders')
         .update({
@@ -46,8 +57,8 @@ export async function POST(request: NextRequest) {
           square_payment_id: paymentIntent.id,
           updated_at: new Date().toISOString()
         })
-        .eq('id', orderId)
-      if (error) console.error('Webhook: failed to update order', orderId, error)
+        .eq('id', orderUuid)
+      if (error) console.error('Webhook: failed to update order', orderUuid, error)
     }
   }
 

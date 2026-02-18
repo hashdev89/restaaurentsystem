@@ -150,6 +150,19 @@ export function Checkout() {
     if (cartTable) setTableNumber(cartTable)
   }, [cartTable])
 
+  const [onlineCardSurchargePercent, setOnlineCardSurchargePercent] = useState(0)
+  useEffect(() => {
+    const restaurantId = items[0]?.restaurantId
+    if (!restaurantId) return
+    fetch(`/api/restaurants/${restaurantId}`)
+      .then((res) => (res.ok ? res.json() : null))
+      .then((data) => {
+        const pct = data?.restaurant?.onlineCardSurchargePercent
+        setOnlineCardSurchargePercent(typeof pct === 'number' && pct >= 0 ? pct : 0)
+      })
+      .catch(() => setOnlineCardSurchargePercent(0))
+  }, [items])
+
   // Form State – pre-fill from cached customer profile (client-only)
   const [formData, setFormData] = useState({
     firstName: '',
@@ -182,10 +195,13 @@ export function Checkout() {
     }))
   }
 
-  const subtotalExGst = total
   const gst = gstAmount(total)
   const serviceFeeAmount = 1 // Flat A$1 per order
-  const finalTotal = total + gst + serviceFeeAmount // Subtotal (ex GST) + GST (10%) + Service fee (A$1)
+  const baseTotalBeforeCard = total + gst + serviceFeeAmount
+  const cardSurchargeAmount = paymentMethod === 'pay-now' && onlineCardSurchargePercent > 0
+    ? baseTotalBeforeCard * (onlineCardSurchargePercent / 100)
+    : 0
+  const finalTotal = baseTotalBeforeCard + cardSurchargeAmount
 
   const buildDineInSeatingNote = (): string | null => {
     if (orderType !== 'dine-in') return null
@@ -559,10 +575,7 @@ export function Checkout() {
                 </ul>
               </div>
               <div className="space-y-2 mb-4">
-                <div className="flex justify-between text-gray-600 text-sm">
-                  <span>Subtotal (incl. GST) — {items.length} items</span>
-                  <span>A${(subtotalExGst + gst).toFixed(2)}</span>
-                </div>
+                <h3 className="text-sm font-medium text-gray-700 pt-2 border-t border-gray-200">Bill breakdown</h3>
                 <div className="flex justify-between text-gray-600 text-sm">
                   <span>GST included (10%)</span>
                   <span>A${gst.toFixed(2)}</span>
@@ -571,10 +584,28 @@ export function Checkout() {
                   <span>Service fee</span>
                   <span>A$1.00</span>
                 </div>
-              </div>
-              <div className="border-t border-gray-200 pt-3 flex justify-between font-bold text-lg text-gray-900 mb-6">
-                <span>TOTAL</span>
-                <span>A${finalTotal.toFixed(2)}</span>
+                <div className="flex justify-between font-semibold text-gray-900 pt-2 border-t border-gray-200">
+                  <span>Total</span>
+                  <span>A${baseTotalBeforeCard.toFixed(2)}</span>
+                </div>
+                {paymentMethod === 'pay-now' && onlineCardSurchargePercent > 0 && (
+                  <>
+                    <div className="flex justify-between text-gray-600 text-sm">
+                      <span>Card payment surcharge ({onlineCardSurchargePercent}%)</span>
+                      <span>A${cardSurchargeAmount.toFixed(2)}</span>
+                    </div>
+                    <div className="flex justify-between font-bold text-lg text-gray-900 pt-2 border-t-2 border-gray-300 mb-6">
+                      <span>Grand Total</span>
+                      <span>A${finalTotal.toFixed(2)}</span>
+                    </div>
+                  </>
+                )}
+                {!(paymentMethod === 'pay-now' && onlineCardSurchargePercent > 0) && (
+                  <div className="flex justify-between font-bold text-lg text-gray-900 pt-2 border-t-2 border-gray-300 mb-6">
+                    <span>Grand Total</span>
+                    <span>A${finalTotal.toFixed(2)}</span>
+                  </div>
+                )}
               </div>
 
               {/* Buttons - responsive; hide when Stripe payment step is active (pay button is in Payment card) */}
