@@ -26,6 +26,7 @@ type RestaurantRow = {
   surcharge_manual_override?: string | null
   online_card_surcharge_percent?: number | null
   pos_card_surcharge_percent?: number | null
+  service_types?: unknown
 }
 
 function toRestaurant(row: RestaurantRow) {
@@ -57,7 +58,14 @@ function toRestaurant(row: RestaurantRow) {
     surchargeManualOverride: (row.surcharge_manual_override === 'sunday' || row.surcharge_manual_override === 'public_holiday' || row.surcharge_manual_override === 'none') ? row.surcharge_manual_override : 'auto',
     onlineCardSurchargePercent: row.online_card_surcharge_percent != null ? Number(row.online_card_surcharge_percent) : 0,
     posCardSurchargePercent: row.pos_card_surcharge_percent != null ? Number(row.pos_card_surcharge_percent) : 0,
+    serviceTypes: parseServiceTypes(row.service_types),
   }
+}
+
+function parseServiceTypes(v: unknown): ('dine-in' | 'delivery' | 'takeaway')[] {
+  if (!Array.isArray(v)) return []
+  const allowed = ['dine-in', 'delivery', 'takeaway'] as const
+  return v.filter((s): s is (typeof allowed)[number] => typeof s === 'string' && allowed.includes(s as (typeof allowed)[number]))
 }
 
 export async function GET(
@@ -121,6 +129,10 @@ export async function PATCH(
     if (typeof body.posCardSurchargePercent === 'number' && body.posCardSurchargePercent >= 0) {
       updates.pos_card_surcharge_percent = body.posCardSurchargePercent
     }
+    if (Array.isArray(body.serviceTypes)) {
+      const allowed = ['dine-in', 'delivery', 'takeaway']
+      updates.service_types = body.serviceTypes.filter((s: string) => allowed.includes(s))
+    }
 
     if (Object.keys(updates).length === 0) {
       return NextResponse.json({ error: 'No valid fields to update' }, { status: 400 })
@@ -166,8 +178,38 @@ export async function DELETE(
       return NextResponse.json({ error: msg }, { status: 500 })
     }
 
-    // Delete orders for this restaurant first (cascade deletes order_items).
-    // Then we can delete the restaurant (cascade deletes menu_items) without violating order_items.menu_item_id fkey.
+    // 1. Remove all order_items that reference this restaurant's menu_items (by menu_item_id).
+    //    This must happen before deleting menu_items, otherwise FK order_items_menu_item_id_fkey fails.
+    const { data: menuItemRows, error: menuSelectError } = await client
+      .from('menu_items')
+      .select('id')
+      .eq('restaurant_id', id)
+
+    if (menuSelectError) {
+      console.error('DELETE restaurant: select menu_items error', menuSelectError)
+      return NextResponse.json({ error: 'Could not load restaurant menu items.' }, { status: 500 })
+    }
+
+    const menuItemIds = (menuItemRows ?? []).map((r: { id: string }) => r.id)
+    if (menuItemIds.length > 0) {
+      // Delete in chunks to avoid URL/query size limits (e.g. 200 ids per batch)
+      const chunkSize = 200
+      for (let i = 0; i < menuItemIds.length; i += chunkSize) {
+        const chunk = menuItemIds.slice(i, i + chunkSize)
+        const { error: orderItemsError } = await client
+          .from('order_items')
+          .delete()
+          .in('menu_item_id', chunk)
+
+        if (orderItemsError) {
+          console.error('DELETE restaurant: delete order_items error', orderItemsError)
+          const msg = orderItemsError.message || 'Could not delete order items.'
+          return NextResponse.json({ error: msg }, { status: 500 })
+        }
+      }
+    }
+
+    // 2. Delete orders for this restaurant
     const { error: ordersError } = await client
       .from('orders')
       .delete()
@@ -179,6 +221,26 @@ export async function DELETE(
       return NextResponse.json({ error: msg }, { status: 500 })
     }
 
+    // 3. Delete menu_items for this restaurant (no longer referenced by order_items)
+    const { error: menuItemsError } = await client
+      .from('menu_items')
+      .delete()
+      .eq('restaurant_id', id)
+
+    if (menuItemsError) {
+      console.error('DELETE restaurant: delete menu_items error', menuItemsError)
+      const msg = menuItemsError.message || 'Could not delete menu items.'
+      return NextResponse.json({ error: msg }, { status: 500 })
+    }
+
+    // 4. Delete other child rows that reference this restaurant
+    const childTables = ['tables', 'inventory', 'category_customizations'] as const
+    for (const table of childTables) {
+      const { error: childError } = await client.from(table).delete().eq('restaurant_id', id)
+      if (childError) console.warn(`DELETE restaurant: ${table}`, childError)
+    }
+
+    // 5. Delete restaurant
     const { error } = await client
       .from('restaurants')
       .delete()

@@ -190,11 +190,21 @@ export function SystemDashboard() {
     }
     setAddRestaurantSaving(true)
     try {
-      // Auto-fetch coordinates from address if not already set
+      // Auto-fetch coordinates from address or location if not already set
       let lat = addRestaurantForm.latitude ? Number(addRestaurantForm.latitude) : undefined
       let lng = addRestaurantForm.longitude ? Number(addRestaurantForm.longitude) : undefined
-      if (address.trim() && (lat == null || lng == null || Number.isNaN(lat) || Number.isNaN(lng))) {
-        const coords = await geocodeAddress(address.trim())
+      const locationStr = addRestaurantForm.location?.trim() ?? ''
+      const needCoords = lat == null || lng == null || Number.isNaN(lat) || Number.isNaN(lng)
+      if (needCoords && address.trim()) {
+        const query = locationStr ? `${address.trim()}, ${locationStr}` : address.trim()
+        const coords = await geocodeAddress(query)
+        if (coords) {
+          lat = coords.lat
+          lng = coords.lng
+        }
+      }
+      if (needCoords && (lat == null || lng == null) && locationStr) {
+        const coords = await geocodeAddress(locationStr)
         if (coords) {
           lat = coords.lat
           lng = coords.lng
@@ -259,7 +269,16 @@ export function SystemDashboard() {
       const usersData = await usersRes.json()
       if (usersRes.ok) setUsers(usersData.users ?? [])
     } catch (err) {
-      showError('Could not add restaurant', err instanceof Error ? err.message : 'Please try again.')
+      const msg = err instanceof Error ? err.message : 'Please try again.'
+      const isNetworkOrFetch =
+        typeof msg === 'string' &&
+        (msg.includes('fetch failed') || msg.includes('Failed to fetch') || msg.includes('NetworkError') || msg.includes('Network request failed'))
+      showError(
+        'Could not add restaurant',
+        isNetworkOrFetch
+          ? 'Cannot reach the server or database. Check: (1) Dev server is running. (2) If deployed: set NEXT_PUBLIC_SUPABASE_URL, NEXT_PUBLIC_SUPABASE_ANON_KEY, and SUPABASE_SERVICE_ROLE_KEY in Project Settings → Environment Variables, then redeploy.'
+          : msg
+      )
     } finally {
       setAddRestaurantSaving(false)
     }
@@ -905,14 +924,16 @@ export function SystemDashboard() {
                           onChange={(e) => setAddRestaurantForm((f) => ({ ...f, address: e.target.value }))}
                           onBlur={async () => {
                             const addr = addRestaurantForm.address?.trim()
-                            if (!addr) return
-                            const coords = await geocodeAddress(addr)
+                            const loc = addRestaurantForm.location?.trim()
+                            const query = addr && loc ? `${addr}, ${loc}` : addr || loc
+                            if (!query) return
+                            const coords = await geocodeAddress(query)
                             if (coords) {
                               setAddRestaurantForm((f) => ({ ...f, latitude: String(coords.lat), longitude: String(coords.lng) }))
                               success('Coordinates fetched', 'Lat/lng set from address. Restaurant will appear on the map.')
                             }
                           }}
-                          placeholder="Full address (lat/lng auto-fetched when you leave this field)"
+                          placeholder="e.g. 123 Main St or 53F5+M5 Camberwell, Victoria, Australia"
                           required
                         />
                       </div>
@@ -926,11 +947,20 @@ export function SystemDashboard() {
                         />
                       </div>
                       <div>
-                        <label className="block text-sm font-medium text-gray-700 mb-1">Location (city/area)</label>
+                        <label className="block text-sm font-medium text-gray-700 mb-1">Location (city/area) — auto-fills lat/lng on blur</label>
                         <Input
                           value={addRestaurantForm.location}
                           onChange={(e) => setAddRestaurantForm((f) => ({ ...f, location: e.target.value }))}
-                          placeholder="e.g. Sydney, NSW"
+                          onBlur={async () => {
+                            const loc = addRestaurantForm.location?.trim()
+                            if (!loc) return
+                            const coords = await geocodeAddress(loc)
+                            if (coords) {
+                              setAddRestaurantForm((f) => ({ ...f, latitude: String(coords.lat), longitude: String(coords.lng) }))
+                              success('Coordinates fetched', 'Lat/lng set from location. Restaurant will appear on the map.')
+                            }
+                          }}
+                          placeholder="e.g. Camberwell, Victoria, Australia or 53F5+M5 Camberwell"
                         />
                       </div>
                       <div className="flex flex-wrap gap-2 items-end">
@@ -957,11 +987,13 @@ export function SystemDashboard() {
                           className="shrink-0"
                           onClick={async () => {
                             const addr = addRestaurantForm.address?.trim()
-                            if (!addr) { showError('No address', 'Enter address first, then click Look up on map.') ; return }
-                            const coords = await geocodeAddress(addr)
+                            const loc = addRestaurantForm.location?.trim()
+                            const query = addr && loc ? `${addr}, ${loc}` : addr || loc
+                            if (!query) { showError('No address or location', 'Enter address or location first, then click Look up on map.') ; return }
+                            const coords = await geocodeAddress(query)
                             if (coords) {
                               setAddRestaurantForm((f) => ({ ...f, latitude: String(coords.lat), longitude: String(coords.lng) }))
-                              success('Coordinates found', 'Lat/lng set from address. Restaurant will appear on the map.')
+                              success('Coordinates found', 'Lat/lng set. Restaurant will appear on the map.')
                             } else {
                               showError('Lookup failed', 'Could not find coordinates. Add latitude/longitude manually or set NEXT_PUBLIC_MAPBOX_TOKEN.')
                             }
@@ -1035,18 +1067,34 @@ export function SystemDashboard() {
                         onChange={(e) => setEditRestaurantForm((f) => ({ ...f, address: e.target.value }))}
                         onBlur={async () => {
                           const addr = editRestaurantForm.address?.trim()
-                          if (!addr) return
-                          const coords = await geocodeAddress(addr)
+                          const loc = editRestaurantForm.location?.trim()
+                          const query = addr && loc ? `${addr}, ${loc}` : addr || loc
+                          if (!query) return
+                          const coords = await geocodeAddress(query)
                           if (coords) {
                             setEditRestaurantForm((f) => ({ ...f, latitude: String(coords.lat), longitude: String(coords.lng) }))
                             success('Coordinates fetched', 'Lat/lng set from address. Restaurant will appear on the map.')
                           }
                         }}
-                        placeholder="Full address (lat/lng auto-fetched when you leave this field)"
+                        placeholder="e.g. 123 Main St or full address (lat/lng auto on blur)"
                         required
                       />
                       <Input label="Phone *" value={editRestaurantForm.phone} onChange={(e) => setEditRestaurantForm((f) => ({ ...f, phone: e.target.value }))} placeholder="Phone" required />
-                      <Input label="Location" value={editRestaurantForm.location} onChange={(e) => setEditRestaurantForm((f) => ({ ...f, location: e.target.value }))} placeholder="e.g. Sydney, NSW" />
+                      <Input
+                        label="Location (city/area) — auto-fills lat/lng on blur"
+                        value={editRestaurantForm.location}
+                        onChange={(e) => setEditRestaurantForm((f) => ({ ...f, location: e.target.value }))}
+                        onBlur={async () => {
+                          const loc = editRestaurantForm.location?.trim()
+                          if (!loc) return
+                          const coords = await geocodeAddress(loc)
+                          if (coords) {
+                            setEditRestaurantForm((f) => ({ ...f, latitude: String(coords.lat), longitude: String(coords.lng) }))
+                            success('Coordinates fetched', 'Lat/lng set from location. Restaurant will appear on the map.')
+                          }
+                        }}
+                        placeholder="e.g. Camberwell, Victoria, Australia"
+                      />
                       <div className="flex flex-wrap gap-2 items-end">
                         <div className="flex-1 min-w-[100px]">
                           <Input label="Latitude (for map)" value={editRestaurantForm.latitude} onChange={(e) => setEditRestaurantForm((f) => ({ ...f, latitude: e.target.value }))} placeholder="e.g. -33.8688" />
@@ -1061,11 +1109,13 @@ export function SystemDashboard() {
                           className="shrink-0"
                           onClick={async () => {
                             const addr = editRestaurantForm.address?.trim()
-                            if (!addr) { showError('No address', 'Enter address first, then click Look up on map.') ; return }
-                            const coords = await geocodeAddress(addr)
+                            const loc = editRestaurantForm.location?.trim()
+                            const query = addr && loc ? `${addr}, ${loc}` : addr || loc
+                            if (!query) { showError('No address or location', 'Enter address or location first, then click Look up on map.') ; return }
+                            const coords = await geocodeAddress(query)
                             if (coords) {
                               setEditRestaurantForm((f) => ({ ...f, latitude: String(coords.lat), longitude: String(coords.lng) }))
-                              success('Coordinates found', 'Lat/lng set from address. Restaurant will appear on the map.')
+                              success('Coordinates found', 'Lat/lng set. Restaurant will appear on the map.')
                             } else {
                               showError('Lookup failed', 'Could not find coordinates. Add latitude/longitude manually or set NEXT_PUBLIC_MAPBOX_TOKEN.')
                             }

@@ -64,6 +64,19 @@ export function RestaurantCard({ restaurant, onClick, showBooking = true }: Rest
             {restaurant.description}
           </p>
 
+          {restaurant.serviceTypes && restaurant.serviceTypes.length > 0 && (
+            <div className="flex flex-wrap gap-1.5 mb-4">
+              {restaurant.serviceTypes.map((t) => (
+                <span
+                  key={t}
+                  className="inline-flex items-center px-2.5 py-0.5 rounded-full text-xs font-medium bg-orange-100 text-orange-800"
+                >
+                  {t === 'dine-in' ? 'Dine-in' : t === 'delivery' ? 'Delivery' : 'Takeaway'}
+                </span>
+              ))}
+            </div>
+          )}
+
           <div className="space-y-2 pt-4 border-t border-gray-100">
             <div className="flex items-center text-sm text-gray-500">
               <MapPin className="mr-2 h-4 w-4 text-gray-400" />

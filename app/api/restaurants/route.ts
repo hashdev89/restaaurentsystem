@@ -27,6 +27,7 @@ type RestaurantRow = {
   surcharge_manual_override?: string | null
   online_card_surcharge_percent?: number | null
   pos_card_surcharge_percent?: number | null
+  service_types?: unknown
   created_at?: string
   updated_at?: string
 }
@@ -61,7 +62,14 @@ function toRestaurant(row: RestaurantRow) {
     surchargeManualOverride: (row.surcharge_manual_override === 'sunday' || row.surcharge_manual_override === 'public_holiday' || row.surcharge_manual_override === 'none') ? row.surcharge_manual_override : 'auto',
     onlineCardSurchargePercent: row.online_card_surcharge_percent != null ? Number(row.online_card_surcharge_percent) : 0,
     posCardSurchargePercent: row.pos_card_surcharge_percent != null ? Number(row.pos_card_surcharge_percent) : 0,
+    serviceTypes: parseServiceTypes(row.service_types),
   }
+}
+
+function parseServiceTypes(v: unknown): ('dine-in' | 'delivery' | 'takeaway')[] {
+  if (!Array.isArray(v)) return []
+  const allowed = ['dine-in', 'delivery', 'takeaway'] as const
+  return v.filter((s): s is (typeof allowed)[number] => typeof s === 'string' && allowed.includes(s as (typeof allowed)[number]))
 }
 
 export async function GET() {
@@ -134,12 +142,18 @@ export async function POST(request: NextRequest) {
     return NextResponse.json({ restaurant: toRestaurant(data) }, { status: 201 })
   } catch (err: unknown) {
     console.error('POST restaurants error:', err)
-    const message =
+    const rawMessage =
       (err && typeof err === 'object' && 'message' in err && typeof (err as { message: unknown }).message === 'string')
         ? (err as { message: string }).message
         : err instanceof Error
           ? err.message
           : 'Failed to create restaurant'
-    return NextResponse.json({ error: message }, { status: 500 })
+    const isFetchOrNetwork =
+      typeof rawMessage === 'string' &&
+      (rawMessage.includes('fetch failed') || rawMessage.includes('Failed to fetch') || rawMessage.includes('ECONNREFUSED') || rawMessage.includes('ENOTFOUND'))
+    const message = isFetchOrNetwork
+      ? 'Database unreachable. Set NEXT_PUBLIC_SUPABASE_URL and SUPABASE_SERVICE_ROLE_KEY (and NEXT_PUBLIC_SUPABASE_ANON_KEY) in .env or Vercel env, then restart or redeploy.'
+      : rawMessage
+    return NextResponse.json({ error: message }, { status: isFetchOrNetwork ? 503 : 500 })
   }
 }

@@ -2,7 +2,7 @@
 
 import { useState, useEffect, useCallback, useMemo } from 'react'
 import Link from 'next/link'
-import { LayoutDashboard, History, LogOut, Utensils, Plus, Edit, Trash2, Hash, Package, Printer, User, Clock, Lock, Percent, Layers } from 'lucide-react'
+import { LayoutDashboard, History, LogOut, Utensils, Plus, Edit, Trash2, Hash, Package, Printer, User, Clock, Lock, Percent, Layers, Store } from 'lucide-react'
 import { Order, MenuItem, MenuItemCustomizationOption } from '@/types'
 import { OrderCard } from '../OrderCard'
 import { Button } from '../ui/Button'
@@ -50,7 +50,7 @@ export function RestaurantDashboard({ restaurantId: restaurantIdProp }: { restau
     return () => { cancelled = true }
   }, [envOrPropId])
   const [menuItems, setMenuItems] = useState<MenuItem[]>([])
-  const [activeTab, setActiveTab] = useState<'pending' | 'ready' | 'history' | 'menu' | 'tables' | 'stock' | 'staff' | 'shift' | 'access' | 'surcharges'>('pending')
+  const [activeTab, setActiveTab] = useState<'pending' | 'ready' | 'history' | 'menu' | 'tables' | 'stock' | 'staff' | 'shift' | 'access' | 'surcharges' | 'services'>('pending')
   const [isModalOpen, setIsModalOpen] = useState(false)
   const [editingItem, setEditingItem] = useState<Partial<MenuItem> | null>(null)
   const CATEGORY_OPTIONS_NEW = '__new_category__'
@@ -87,6 +87,8 @@ export function RestaurantDashboard({ restaurantId: restaurantIdProp }: { restau
   const [surchargeSaving, setSurchargeSaving] = useState(false)
   const [onlineCardSurchargePercent, setOnlineCardSurchargePercent] = useState(0)
   const [posCardSurchargePercent, setPosCardSurchargePercent] = useState(0)
+  const [serviceTypes, setServiceTypes] = useState<('dine-in' | 'delivery' | 'takeaway')[]>([])
+  const [serviceTypesSaving, setServiceTypesSaving] = useState(false)
   const [restaurantName, setRestaurantName] = useState('')
 
   // Fetch restaurant name for dashboard title
@@ -293,6 +295,22 @@ export function RestaurantDashboard({ restaurantId: restaurantIdProp }: { restau
           }
         })
         .catch(() => { /* ignore */ })
+    }
+  }, [activeTab, currentRestaurantId])
+
+  useEffect(() => {
+    if (activeTab === 'services' && currentRestaurantId) {
+      fetch(`/api/restaurants/${currentRestaurantId}`)
+        .then((res) => res.ok ? res.json() : null)
+        .then((data) => {
+          const r = data?.restaurant
+          if (r && Array.isArray(r.serviceTypes)) {
+            setServiceTypes(r.serviceTypes.filter((s: string) => ['dine-in', 'delivery', 'takeaway'].includes(s)))
+          } else {
+            setServiceTypes([])
+          }
+        })
+        .catch(() => setServiceTypes([]))
     }
   }, [activeTab, currentRestaurantId])
 
@@ -787,10 +805,74 @@ export function RestaurantDashboard({ restaurantId: restaurantIdProp }: { restau
             <Percent className="w-4 h-4 mr-2" />
             Surcharges
           </button>
+          <button
+            onClick={() => setActiveTab('services')}
+            className={`flex items-center px-4 py-2 rounded-md font-medium transition-colors whitespace-nowrap ${
+              activeTab === 'services'
+                ? 'bg-orange-600 text-white'
+                : 'bg-white text-gray-600 hover:bg-gray-50'
+            }`}
+          >
+            <Store className="w-4 h-4 mr-2" />
+            Service types
+          </button>
         </div>
 
         {/* Tab Content */}
-        {activeTab === 'surcharges' ? (
+        {activeTab === 'services' ? (
+          <div>
+            <h2 className="text-lg font-semibold text-gray-900 mb-2">Service types</h2>
+            <p className="text-sm text-gray-600 mb-4">Select the types of service your restaurant offers. These will appear on your listing so customers know what to expect.</p>
+            <Card className="p-6 max-w-2xl">
+              <form
+                onSubmit={async (e) => {
+                  e.preventDefault()
+                  if (!currentRestaurantId) return
+                  setServiceTypesSaving(true)
+                  try {
+                    const res = await fetch(`/api/restaurants/${currentRestaurantId}`, {
+                      method: 'PATCH',
+                      headers: { 'Content-Type': 'application/json' },
+                      body: JSON.stringify({ serviceTypes }),
+                    })
+                    if (!res.ok) throw new Error('Failed to save')
+                    success('Service types saved', 'They will appear on your restaurant listing.')
+                  } catch (e) {
+                    error('Could not save', e instanceof Error ? e.message : 'Failed to save service types')
+                  } finally {
+                    setServiceTypesSaving(false)
+                  }
+                }}
+                className="space-y-6"
+              >
+                <div className="flex flex-col gap-3">
+                  {(['dine-in', 'delivery', 'takeaway'] as const).map((type) => (
+                    <label key={type} className="flex items-center gap-3 cursor-pointer p-3 rounded-lg border border-gray-200 hover:bg-gray-50">
+                      <input
+                        type="checkbox"
+                        checked={serviceTypes.includes(type)}
+                        onChange={(e) => {
+                          if (e.target.checked) {
+                            setServiceTypes((prev) => [...prev, type].sort())
+                          } else {
+                            setServiceTypes((prev) => prev.filter((t) => t !== type))
+                          }
+                        }}
+                        className="rounded border-gray-300 text-orange-600"
+                      />
+                      <span className="font-medium text-gray-900">
+                        {type === 'dine-in' ? 'Dine-in' : type === 'delivery' ? 'Delivery' : 'Takeaway'}
+                      </span>
+                    </label>
+                  ))}
+                </div>
+                <Button type="submit" disabled={serviceTypesSaving}>
+                  {serviceTypesSaving ? 'Saving…' : 'Save service types'}
+                </Button>
+              </form>
+            </Card>
+          </div>
+        ) : activeTab === 'surcharges' ? (
           <div>
             <h2 className="text-lg font-semibold text-gray-900 mb-2">Sunday &amp; public holiday surcharges</h2>
             <p className="text-sm text-gray-600 mb-4">Enable surcharges and set percentages. POS will apply them automatically by date, or use the manual override below. These settings apply to this restaurant and sync to POS.</p>

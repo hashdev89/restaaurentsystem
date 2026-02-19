@@ -3447,30 +3447,28 @@ export function POSSystem({ restaurantId: restaurantIdProp }: { restaurantId?: s
                     <span>A${surchargeAmount.toFixed(2)}</span>
                   </div>
                 )}
-                <div className="flex justify-between font-semibold text-gray-900 pt-2 border-t border-gray-300">
+                <div className="flex justify-between text-xl font-bold text-gray-900 pt-2 border-t-2 border-gray-300">
                   <span>Total</span>
-                  <span>A${totalBeforeCardSurcharge.toFixed(2)}</span>
+                  <span className="text-orange-600">A${totalBeforeCardSurcharge.toFixed(2)}</span>
                 </div>
-                {(paymentMethod === 'card' || paymentMethod === 'mix') && posCardSurchargeAmount > 0 && (
-                  <>
-                    <div className="flex justify-between text-sm text-gray-600">
-                      <span>Card payment surcharge</span>
-                      <span>A${posCardSurchargeAmount.toFixed(2)}</span>
-                    </div>
-                    <div className="flex justify-between text-xl font-bold text-gray-900 pt-2 border-t-2 border-gray-300">
-                      <span>Grand Total</span>
-                      <span className="text-orange-600">A${total.toFixed(2)}</span>
-                    </div>
-                  </>
-                )}
-                {!((paymentMethod === 'card' || paymentMethod === 'mix') && posCardSurchargeAmount > 0) && (
-                  <div className="flex justify-between text-xl font-bold text-gray-900 pt-2 border-t-2 border-gray-300">
-                    <span>Grand Total</span>
-                    <span className="text-orange-600">A${total.toFixed(2)}</span>
-                  </div>
-                )}
               </div>
             </div>
+
+            {/* Card surcharge & amount to pay – only when Card or Mix selected */}
+            {(paymentMethod === 'card' || paymentMethod === 'mix') && posCardSurchargeAmount > 0 && (
+              <div className="bg-amber-50 border border-amber-200 rounded-lg p-4">
+                <div className="space-y-1">
+                  <div className="flex justify-between text-sm text-amber-800">
+                    <span>Card payment surcharge</span>
+                    <span>A${posCardSurchargeAmount.toFixed(2)}</span>
+                  </div>
+                  <div className="flex justify-between text-lg font-bold text-amber-900 pt-2 border-t border-amber-300">
+                    <span>Amount to pay</span>
+                    <span>A${total.toFixed(2)}</span>
+                  </div>
+                </div>
+              </div>
+            )}
 
             {/* Cash: amount received and change */}
             {paymentMethod === 'cash' && (
@@ -3874,9 +3872,11 @@ export function POSSystem({ restaurantId: restaurantIdProp }: { restaurantId?: s
             )}
             <p className="text-sm font-semibold text-gray-900">Total: A${totalBeforeCardSurcharge.toFixed(2)}</p>
             {(paymentMethod === 'card' || paymentMethod === 'mix') && posCardSurchargeAmount > 0 && (
-              <p className="text-sm text-gray-600">Card surcharge: A${posCardSurchargeAmount.toFixed(2)}</p>
+              <>
+                <p className="text-sm text-amber-700">Card surcharge: A${posCardSurchargeAmount.toFixed(2)}</p>
+                <p className="text-base font-bold text-orange-600">Amount to pay: A${total.toFixed(2)}</p>
+              </>
             )}
-            <p className="text-base font-bold text-orange-600">Grand Total: A${total.toFixed(2)}</p>
           </div>
         </div>
       </div>

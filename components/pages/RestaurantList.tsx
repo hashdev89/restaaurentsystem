@@ -14,8 +14,8 @@ import { cn } from '@/lib/utils'
 import mapboxgl from 'mapbox-gl'
 import 'mapbox-gl/dist/mapbox-gl.css'
 
-/** Map API restaurant row to Restaurant type (API returns latitude/longitude for map) */
-function mapApiRestaurant(row: { id: string; name: string; description: string | null; address: string; phone: string; image: string | null; location: string | null; latitude?: number | null; longitude?: number | null; is_active: boolean; rating: number; review_count: number }): Restaurant {
+/** Map API restaurant row to Restaurant type (API returns latitude/longitude for map and serviceTypes) */
+function mapApiRestaurant(row: { id: string; name: string; description: string | null; address: string; phone: string; image: string | null; location: string | null; latitude?: number | null; longitude?: number | null; is_active?: boolean; rating: number; review_count: number; serviceTypes?: ('dine-in' | 'delivery' | 'takeaway')[] }): Restaurant {
   const lat = row.latitude != null ? Number(row.latitude) : undefined
   const lng = row.longitude != null ? Number(row.longitude) : undefined
   return {
@@ -25,11 +25,12 @@ function mapApiRestaurant(row: { id: string; name: string; description: string |
     address: row.address,
     phone: row.phone,
     image: row.image ?? 'https://images.unsplash.com/photo-1517248135467-4c7edcad34c4?w=800&q=80',
-    isActive: row.is_active,
+    isActive: row.is_active !== false,
     rating: Number(row.rating),
     reviewCount: Number(row.review_count),
     location: row.location ?? '',
     coordinates: lat != null && lng != null && !Number.isNaN(lat) && !Number.isNaN(lng) ? { lat, lng } : undefined,
+    serviceTypes: Array.isArray(row.serviceTypes) ? row.serviceTypes : undefined,
   }
 }
 

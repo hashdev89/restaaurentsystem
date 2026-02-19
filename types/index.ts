@@ -46,6 +46,8 @@ export interface Restaurant {
   onlineCardSurchargePercent?: number;
   /** Card payment surcharge for POS card payments, percentage (e.g. 1.5). */
   posCardSurchargePercent?: number;
+  /** Service types offered: Dine-in, Delivery, Takeaway. Shown on restaurant list cards. */
+  serviceTypes?: ('dine-in' | 'delivery' | 'takeaway')[];
 }
 
 export type SeatStatus = 'available' | 'reserved' | 'occupied' | 'maintenance';
