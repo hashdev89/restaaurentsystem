@@ -82,36 +82,35 @@ export function Cart() {
                   ))}
                 </ul>
               </div>
-              <div className="space-y-2 mb-4">
-                <h3 className="text-sm font-medium text-gray-700 pt-2 border-t border-gray-200">Bill breakdown</h3>
+              <div className="space-y-2 mb-4 pt-2 border-t border-gray-200">
                 <div className="flex justify-between text-gray-600 text-sm">
                   <span>GST included (10%)</span>
                   <span>A${gstAmount(total).toFixed(2)}</span>
                 </div>
                 <div className="flex justify-between text-gray-600 text-sm">
-                  <span>Service fee</span>
-                  <span>A$1.00</span>
+                  <span>Service fee (incl. GST)</span>
+                  <span>A$1.10</span>
                 </div>
                 <div className="flex justify-between font-semibold text-gray-900 pt-2 border-t border-gray-200">
                   <span>Total</span>
-                  <span>A${(addGst(total) + 1).toFixed(2)}</span>
+                  <span>A${(addGst(total) + 1.1).toFixed(2)}</span>
                 </div>
                 {onlineCardSurchargePercent > 0 && (
                   <>
                     <div className="flex justify-between text-gray-600 text-sm">
-                      <span>Card surcharge ({onlineCardSurchargePercent}%) if paying by card</span>
-                      <span>A${( (addGst(total) + 1) * (onlineCardSurchargePercent / 100) ).toFixed(2)}</span>
+                      <span>Card surcharge ({onlineCardSurchargePercent}%)</span>
+                      <span>A${( (addGst(total) + 1.1) * (onlineCardSurchargePercent / 100) ).toFixed(2)}</span>
                     </div>
                     <div className="flex justify-between font-bold text-lg text-gray-900 pt-2 border-t-2 border-gray-300">
-                      <span>Grand Total (if card)</span>
-                      <span>A${( (addGst(total) + 1) * (1 + onlineCardSurchargePercent / 100) ).toFixed(2)}</span>
+                      <span>Grand Total</span>
+                      <span>A${( (addGst(total) + 1.1) * (1 + onlineCardSurchargePercent / 100) ).toFixed(2)}</span>
                     </div>
                   </>
                 )}
                 {onlineCardSurchargePercent <= 0 && (
                   <div className="flex justify-between font-bold text-lg text-gray-900 pt-2 border-t-2 border-gray-300">
                     <span>Grand Total</span>
-                    <span>A${(addGst(total) + 1).toFixed(2)}</span>
+                    <span>A${(addGst(total) + 1.1).toFixed(2)}</span>
                   </div>
                 )}
               </div>

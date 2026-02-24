@@ -7,7 +7,7 @@ interface ModalProps {
   isOpen: boolean
   onClose: () => void
   title: string
-  /** When false, clicking the overlay does not close the modal; only the close button will close it. Default true. */
+  /** When true, clicking the overlay closes the modal. Default false — close only via Cancel/Close button. */
   closeOnOverlayClick?: boolean
   children: React.ReactNode
 }
@@ -16,7 +16,7 @@ export function Modal({
   isOpen,
   onClose,
   title,
-  closeOnOverlayClick = true,
+  closeOnOverlayClick = false,
   children
 }: ModalProps) {
   useEffect(() => {

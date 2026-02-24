@@ -890,7 +890,7 @@ export function SystemDashboard() {
 
               {/* Add Restaurant modal - only show when on restaurants section */}
               {section === 'restaurants' && showAddRestaurant && (
-                <div className="fixed inset-0 z-50 flex items-center justify-center p-4 bg-black/50" onClick={() => setShowAddRestaurant(false)} role="presentation">
+                <div className="fixed inset-0 z-50 flex items-center justify-center p-4 bg-black/50">
                   <div onClick={(e) => e.stopPropagation()}>
                     <Card className="w-full max-w-md p-6 max-h-[90vh] overflow-y-auto">
                     <div className="flex justify-between items-center mb-4">
@@ -1049,7 +1049,7 @@ export function SystemDashboard() {
 
               {/* Edit Restaurant modal - only show when on restaurants section */}
               {section === 'restaurants' && editingRestaurant && (
-                <div className="fixed inset-0 z-50 flex items-center justify-center p-4 bg-black/50" onClick={() => setEditingRestaurant(null)} role="presentation">
+                <div className="fixed inset-0 z-50 flex items-center justify-center p-4 bg-black/50">
                   <div onClick={(e) => e.stopPropagation()}>
                     <Card className="w-full max-w-md p-6 max-h-[90vh] overflow-y-auto">
                     <div className="flex justify-between items-center mb-4">
@@ -1179,7 +1179,7 @@ export function SystemDashboard() {
 
               {/* Delete Restaurant confirmation */}
               {restaurantToDelete && (
-                <div className="fixed inset-0 z-50 flex items-center justify-center p-4 bg-black/50" onClick={() => setRestaurantToDelete(null)} role="presentation">
+                <div className="fixed inset-0 z-50 flex items-center justify-center p-4 bg-black/50">
                   <div onClick={(e) => e.stopPropagation()}>
                     <Card className="w-full max-w-md p-6">
                     <h3 className="text-lg font-semibold text-gray-900 mb-2">Delete restaurant?</h3>
@@ -1412,7 +1412,7 @@ export function SystemDashboard() {
 
                 {/* Add User modal - only show when on users section */}
                 {section === 'users' && showAddUser && (
-                  <div className="fixed inset-0 z-50 flex items-center justify-center p-4 bg-black/50" onClick={() => setShowAddUser(false)} role="presentation">
+                  <div className="fixed inset-0 z-50 flex items-center justify-center p-4 bg-black/50">
                     <div onClick={(e) => e.stopPropagation()}>
                       <Card className="w-full max-w-md p-6">
                       <div className="flex justify-between items-center mb-4">

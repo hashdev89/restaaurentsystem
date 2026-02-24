@@ -125,7 +125,7 @@ export function MenuItem({ item }: MenuItemProps) {
               <h3 className="text-lg font-semibold text-gray-900">{item.name}</h3>
               {!hasSizes && (
                 <span className="font-medium text-gray-900">
-                  A${priceInclGst(item.price).toFixed(2)} <span className="text-xs font-normal text-gray-500">(incl GST)</span>
+                  A${priceInclGst(item.price).toFixed(2)}
                 </span>
               )}
             </div>
@@ -167,7 +167,6 @@ export function MenuItem({ item }: MenuItemProps) {
         isOpen={showCustomizeModal}
         onClose={() => setShowCustomizeModal(false)}
         title={`Customize: ${item.name}`}
-        closeOnOverlayClick={true}
       >
         <div className="space-y-4 max-h-[70vh] overflow-y-auto">
           {hasSizes && item.sizes && item.sizes.length > 0 && (

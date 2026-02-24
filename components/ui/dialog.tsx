@@ -7,6 +7,8 @@ import { cn } from '@/lib/utils'
 interface DialogProps {
   open?: boolean
   onOpenChange?: (open: boolean) => void
+  /** When true, clicking the overlay closes the dialog. Default false — close only via Cancel/Close button. */
+  closeOnOverlayClick?: boolean
   children: React.ReactNode
 }
 
@@ -16,7 +18,7 @@ interface DialogContentProps extends React.HTMLAttributes<HTMLDivElement> {
   onClose?: () => void
 }
 
-const Dialog = ({ open, onOpenChange, children }: DialogProps) => {
+const Dialog = ({ open, onOpenChange, closeOnOverlayClick = false, children }: DialogProps) => {
   React.useEffect(() => {
     if (open) {
       document.body.style.overflow = 'hidden'
@@ -34,7 +36,7 @@ const Dialog = ({ open, onOpenChange, children }: DialogProps) => {
     <div className="fixed inset-0 z-50 flex items-center justify-center">
       <div
         className="fixed inset-0 bg-black/50 transition-opacity"
-        onClick={() => onOpenChange?.(false)}
+        onClick={closeOnOverlayClick ? () => onOpenChange?.(false) : undefined}
         aria-hidden="true"
       />
       {children}

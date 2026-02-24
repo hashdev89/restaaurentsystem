@@ -22,8 +22,9 @@ export function Navigation() {
   const { itemCount } = useCart()
   const [mobileMenuOpen, setMobileMenuOpen] = useState(false)
 
-  // Hide navigation on POS page
-  if (pathname === '/pos') {
+  // Hide navigation when in POS system (/pos or /restaurant/:id/pos)
+  const isPOS = pathname === '/pos' || /^\/restaurant\/[^/]+\/pos\/?$/.test(pathname)
+  if (isPOS) {
     return null
   }
 
@@ -49,10 +50,7 @@ export function Navigation() {
           {/* Logo/Brand */}
           <Link href="/" className="flex items-center space-x-2">
             <ChefHat className="w-6 h-6 text-orange-600" />
-            <div className="flex flex-col">
-              <span className="text-xl font-bold text-gray-900">EasyMenu</span>
-              <span className="text-xs text-gray-500 -mt-0.5 hidden sm:block">Search Easy & Order Easy</span>
-            </div>
+            <span className="text-xl font-bold text-gray-900">EasyMenu</span>
           </Link>
 
           {/* Desktop Navigation */}

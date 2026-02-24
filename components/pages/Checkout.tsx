@@ -196,7 +196,7 @@ export function Checkout() {
   }
 
   const gst = gstAmount(total)
-  const serviceFeeAmount = 1 // Flat A$1 per order
+  const serviceFeeAmount = 1.1 // A$1.00 + 10% GST = A$1.10 per order
   const baseTotalBeforeCard = total + gst + serviceFeeAmount
   const cardSurchargeAmount = paymentMethod === 'pay-now' && onlineCardSurchargePercent > 0
     ? baseTotalBeforeCard * (onlineCardSurchargePercent / 100)
@@ -574,31 +574,24 @@ export function Checkout() {
                   })}
                 </ul>
               </div>
-              <div className="space-y-2 mb-4">
-                <h3 className="text-sm font-medium text-gray-700 pt-2 border-t border-gray-200">Bill breakdown</h3>
+              <div className="space-y-2 mb-4 pt-2 border-t border-gray-200">
                 <div className="flex justify-between text-gray-600 text-sm">
                   <span>GST included (10%)</span>
                   <span>A${gst.toFixed(2)}</span>
                 </div>
                 <div className="flex justify-between text-gray-600 text-sm">
-                  <span>Service fee</span>
-                  <span>A$1.00</span>
+                  <span>Service fee (incl. GST)</span>
+                  <span>A$1.10</span>
                 </div>
                 <div className="flex justify-between font-semibold text-gray-900 pt-2 border-t border-gray-200">
                   <span>Total</span>
                   <span>A${baseTotalBeforeCard.toFixed(2)}</span>
                 </div>
                 {paymentMethod === 'pay-now' && onlineCardSurchargePercent > 0 && (
-                  <>
-                    <div className="flex justify-between text-gray-600 text-sm">
-                      <span>Card payment surcharge ({onlineCardSurchargePercent}%)</span>
-                      <span>A${cardSurchargeAmount.toFixed(2)}</span>
-                    </div>
-                    <div className="flex justify-between font-bold text-lg text-gray-900 pt-2 border-t-2 border-gray-300 mb-6">
-                      <span>Grand Total</span>
-                      <span>A${finalTotal.toFixed(2)}</span>
-                    </div>
-                  </>
+                  <div className="flex justify-between font-bold text-lg text-gray-900 pt-2 border-t-2 border-gray-300 mb-6">
+                    <span>Grand Total</span>
+                    <span>A${finalTotal.toFixed(2)}</span>
+                  </div>
                 )}
                 {!(paymentMethod === 'pay-now' && onlineCardSurchargePercent > 0) && (
                   <div className="flex justify-between font-bold text-lg text-gray-900 pt-2 border-t-2 border-gray-300 mb-6">

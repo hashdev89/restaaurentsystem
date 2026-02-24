@@ -1,6 +1,6 @@
 'use client'
 
-import { useState, useEffect, useCallback, useMemo } from 'react'
+import { useState, useEffect, useCallback, useMemo, useRef } from 'react'
 import Link from 'next/link'
 import { LayoutDashboard, History, LogOut, Utensils, Plus, Edit, Trash2, Hash, Package, Printer, User, Clock, Lock, Percent, Layers, Store } from 'lucide-react'
 import { Order, MenuItem, MenuItemCustomizationOption } from '@/types'
@@ -12,10 +12,29 @@ import { Input } from '../ui/Input'
 import { Select } from '../ui/Select'
 import { MenuItemForm, type CategoryCustomizationsMap } from '../MenuItemForm'
 import { normalizeOrders, type SupabaseOrderRow } from '@/lib/orders'
-import { priceInclGst } from '@/lib/gst'
 import { useNotification } from '../providers/NotificationProvider'
 
 const ORDERS_POLL_MS = 8000
+
+/** Play a short bell tone (e.g. when a new order arrives). */
+function playNewOrderBell() {
+  if (typeof window === 'undefined') return
+  try {
+    const ctx = new (window.AudioContext || (window as unknown as { webkitAudioContext: typeof AudioContext }).webkitAudioContext)()
+    const osc = ctx.createOscillator()
+    const gain = ctx.createGain()
+    osc.connect(gain)
+    gain.connect(ctx.destination)
+    osc.frequency.value = 880
+    osc.type = 'sine'
+    gain.gain.setValueAtTime(0.15, ctx.currentTime)
+    gain.gain.exponentialRampToValueAtTime(0.01, ctx.currentTime + 0.2)
+    osc.start(ctx.currentTime)
+    osc.stop(ctx.currentTime + 0.2)
+  } catch {
+    // ignore if AudioContext not supported or autoplay blocked
+  }
+}
 
 function getDefaultRestaurantId(): string {
   if (typeof process === 'undefined' || !process.env) return ''
@@ -29,6 +48,7 @@ export function RestaurantDashboard({ restaurantId: restaurantIdProp }: { restau
   const currentRestaurantId = envOrPropId || resolvedFirstRestaurantId
   const { success, error, info } = useNotification()
   const [orders, setOrders] = useState<Order[]>([])
+  const previousPendingOrderIdsRef = useRef<Set<string> | null>(null)
 
   // When no restaurant in URL/env, use first restaurant from API
   useEffect(() => {
@@ -113,7 +133,14 @@ export function RestaurantDashboard({ restaurantId: restaurantIdProp }: { restau
       if (!res.ok) return
       const data = await res.json()
       const list = (data.orders || []) as SupabaseOrderRow[]
-      setOrders(normalizeOrders(list))
+      const normalized = normalizeOrders(list)
+      const pendingIds = new Set(normalized.filter((o) => o.status === 'pending').map((o) => o.id))
+      if (previousPendingOrderIdsRef.current !== null) {
+        const hasNewPending = [...pendingIds].some((id) => !previousPendingOrderIdsRef.current?.has(id))
+        if (hasNewPending) playNewOrderBell()
+      }
+      previousPendingOrderIdsRef.current = pendingIds
+      setOrders(normalized)
     } catch (e) {
       console.error('Fetch orders error:', e)
     } finally {
@@ -449,7 +476,7 @@ export function RestaurantDashboard({ restaurantId: restaurantIdProp }: { restau
         <body>
           <div class="label">
             <h3>${item.name}</h3>
-            <div class="price">A$${priceInclGst(Number(item.price)).toFixed(2)} (incl. GST)</div>
+            <div class="price">A$${Number(item.price).toFixed(2)}</div>
             <img src="${barcodeImg}" alt="Barcode" />
             <div class="code">${item.barcode}</div>
           </div>
@@ -874,9 +901,9 @@ export function RestaurantDashboard({ restaurantId: restaurantIdProp }: { restau
           </div>
         ) : activeTab === 'surcharges' ? (
           <div>
-            <h2 className="text-lg font-semibold text-gray-900 mb-2">Sunday &amp; public holiday surcharges</h2>
+            <h2 className="text-lg font-semibold text-gray-900 mb-2">Surcharges</h2>
             <p className="text-sm text-gray-600 mb-4">Enable surcharges and set percentages. POS will apply them automatically by date, or use the manual override below. These settings apply to this restaurant and sync to POS.</p>
-            <Card className="p-6 max-w-2xl">
+            <Card className="p-6 max-w-4xl">
               <form
                 onSubmit={async (e) => {
                   e.preventDefault()
@@ -907,145 +934,149 @@ export function RestaurantDashboard({ restaurantId: restaurantIdProp }: { restau
                 }}
                 className="space-y-6"
               >
-                <div>
-                  <h3 className="font-medium text-gray-900 mb-3">Sunday surcharge</h3>
-                  <div className="flex items-center gap-4 flex-wrap">
-                    <label className="flex items-center gap-2 cursor-pointer">
-                      <input
-                        type="checkbox"
-                        checked={surchargeSundayEnabled}
-                        onChange={(e) => setSurchargeSundayEnabled(e.target.checked)}
-                        className="rounded border-gray-300 text-orange-600"
-                      />
-                      <span className="text-sm">Enable Sunday surcharge</span>
-                    </label>
-                    <div className="flex items-center gap-2">
-                      <input
-                        type="number"
-                        min={0}
-                        max={25}
-                        step={0.5}
-                        value={surchargeSundayPercent}
-                        onChange={(e) => setSurchargeSundayPercent(Number(e.target.value) || 0)}
-                        className="w-20 rounded-md border border-gray-300 px-2 py-1.5 text-sm"
-                      />
-                      <span className="text-sm text-gray-500">% (e.g. 5–10)</span>
+                <div className="grid grid-cols-1 lg:grid-cols-2 gap-8">
+                  <div className="space-y-6">
+                    <div>
+                      <h3 className="font-medium text-gray-900 mb-3">Sunday surcharge</h3>
+                      <div className="flex items-center gap-4 flex-wrap">
+                        <label className="flex items-center gap-2 cursor-pointer">
+                          <input
+                            type="checkbox"
+                            checked={surchargeSundayEnabled}
+                            onChange={(e) => setSurchargeSundayEnabled(e.target.checked)}
+                            className="rounded border-gray-300 text-orange-600"
+                          />
+                          <span className="text-sm">Enable Sunday surcharge</span>
+                        </label>
+                        <div className="flex items-center gap-2">
+                          <input
+                            type="number"
+                            min={0}
+                            max={25}
+                            step={0.5}
+                            value={surchargeSundayPercent}
+                            onChange={(e) => setSurchargeSundayPercent(Number(e.target.value) || 0)}
+                            className="w-20 rounded-md border border-gray-300 px-2 py-1.5 text-sm"
+                          />
+                          <span className="text-sm text-gray-500">% (e.g. 5–10)</span>
+                        </div>
+                      </div>
                     </div>
-                  </div>
-                </div>
-                <div>
-                  <h3 className="font-medium text-gray-900 mb-3">Public holiday surcharge</h3>
-                  <div className="flex items-center gap-4 flex-wrap">
-                    <label className="flex items-center gap-2 cursor-pointer">
-                      <input
-                        type="checkbox"
-                        checked={surchargePublicHolidayEnabled}
-                        onChange={(e) => setSurchargePublicHolidayEnabled(e.target.checked)}
-                        className="rounded border-gray-300 text-orange-600"
-                      />
-                      <span className="text-sm">Enable public holiday surcharge</span>
-                    </label>
-                    <div className="flex items-center gap-2">
-                      <input
-                        type="number"
-                        min={0}
-                        max={25}
-                        step={0.5}
-                        value={surchargePublicHolidayPercent}
-                        onChange={(e) => setSurchargePublicHolidayPercent(Number(e.target.value) || 0)}
-                        className="w-20 rounded-md border border-gray-300 px-2 py-1.5 text-sm"
-                      />
-                      <span className="text-sm text-gray-500">% (e.g. 10–15)</span>
+                    <div>
+                      <h3 className="font-medium text-gray-900 mb-3">Public holiday surcharge</h3>
+                      <div className="flex items-center gap-4 flex-wrap">
+                        <label className="flex items-center gap-2 cursor-pointer">
+                          <input
+                            type="checkbox"
+                            checked={surchargePublicHolidayEnabled}
+                            onChange={(e) => setSurchargePublicHolidayEnabled(e.target.checked)}
+                            className="rounded border-gray-300 text-orange-600"
+                          />
+                          <span className="text-sm">Enable public holiday surcharge</span>
+                        </label>
+                        <div className="flex items-center gap-2">
+                          <input
+                            type="number"
+                            min={0}
+                            max={25}
+                            step={0.5}
+                            value={surchargePublicHolidayPercent}
+                            onChange={(e) => setSurchargePublicHolidayPercent(Number(e.target.value) || 0)}
+                            className="w-20 rounded-md border border-gray-300 px-2 py-1.5 text-sm"
+                          />
+                          <span className="text-sm text-gray-500">% (e.g. 10–15)</span>
+                        </div>
+                      </div>
+                      <div className="mt-3">
+                        <label className="block text-sm font-medium text-gray-700 mb-1">Public holiday dates (YYYY-MM-DD)</label>
+                        <p className="text-xs text-gray-500 mb-2">Add dates when the public holiday surcharge applies. POS checks today’s date against this list.</p>
+                        <div className="flex gap-2 flex-wrap items-center">
+                          <input
+                            type="date"
+                            value={surchargeNewDate}
+                            onChange={(e) => setSurchargeNewDate(e.target.value)}
+                            className="rounded-md border border-gray-300 px-2 py-1.5 text-sm"
+                          />
+                          <Button
+                            type="button"
+                            variant="secondary"
+                            size="sm"
+                            onClick={() => {
+                              if (surchargeNewDate) {
+                                setSurchargePublicHolidayDates((prev) => (prev.includes(surchargeNewDate) ? prev : [...prev, surchargeNewDate].sort()))
+                                setSurchargeNewDate('')
+                              }
+                            }}
+                          >
+                            Add date
+                          </Button>
+                        </div>
+                        {surchargePublicHolidayDates.length > 0 && (
+                          <ul className="mt-2 flex flex-wrap gap-2">
+                            {surchargePublicHolidayDates.map((d) => (
+                              <li key={d} className="inline-flex items-center gap-1 bg-gray-100 rounded px-2 py-1 text-sm">
+                                {d}
+                                <button
+                                  type="button"
+                                  onClick={() => setSurchargePublicHolidayDates((prev) => prev.filter((x) => x !== d))}
+                                  className="text-red-600 hover:text-red-800"
+                                  aria-label="Remove"
+                                >
+                                  <Trash2 className="w-3 h-3" />
+                                </button>
+                              </li>
+                            ))}
+                          </ul>
+                        )}
+                      </div>
                     </div>
-                  </div>
-                  <div className="mt-3">
-                    <label className="block text-sm font-medium text-gray-700 mb-1">Public holiday dates (YYYY-MM-DD)</label>
-                    <p className="text-xs text-gray-500 mb-2">Add dates when the public holiday surcharge applies. POS checks today’s date against this list.</p>
-                    <div className="flex gap-2 flex-wrap items-center">
-                      <input
-                        type="date"
-                        value={surchargeNewDate}
-                        onChange={(e) => setSurchargeNewDate(e.target.value)}
-                        className="rounded-md border border-gray-300 px-2 py-1.5 text-sm"
-                      />
-                      <Button
-                        type="button"
-                        variant="secondary"
-                        size="sm"
-                        onClick={() => {
-                          if (surchargeNewDate) {
-                            setSurchargePublicHolidayDates((prev) => (prev.includes(surchargeNewDate) ? prev : [...prev, surchargeNewDate].sort()))
-                            setSurchargeNewDate('')
-                          }
-                        }}
+                    <div>
+                      <label className="block text-sm font-medium text-gray-700 mb-1">Manual override for today</label>
+                      <p className="text-xs text-gray-500 mb-2">Force which surcharge applies in POS today (or use Auto to use date).</p>
+                      <select
+                        value={surchargeManualOverride}
+                        onChange={(e) => setSurchargeManualOverride(e.target.value as 'auto' | 'sunday' | 'public_holiday' | 'none')}
+                        className="rounded-md border border-gray-300 px-3 py-2 text-sm w-full"
                       >
-                        Add date
-                      </Button>
-                    </div>
-                    {surchargePublicHolidayDates.length > 0 && (
-                      <ul className="mt-2 flex flex-wrap gap-2">
-                        {surchargePublicHolidayDates.map((d) => (
-                          <li key={d} className="inline-flex items-center gap-1 bg-gray-100 rounded px-2 py-1 text-sm">
-                            {d}
-                            <button
-                              type="button"
-                              onClick={() => setSurchargePublicHolidayDates((prev) => prev.filter((x) => x !== d))}
-                              className="text-red-600 hover:text-red-800"
-                              aria-label="Remove"
-                            >
-                              <Trash2 className="w-3 h-3" />
-                            </button>
-                          </li>
-                        ))}
-                      </ul>
-                    )}
-                  </div>
-                </div>
-                <div>
-                  <h3 className="font-medium text-gray-900 mb-3">Card payment surcharges</h3>
-                  <p className="text-xs text-gray-500 mb-3">Percentage added when customer pays by card. Online surcharge applies to the customer cart/checkout; POS surcharge applies to in-store card payments.</p>
-                  <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
-                    <div>
-                      <label className="block text-sm font-medium text-gray-700 mb-1">Online payment (card) surcharge %</label>
-                      <input
-                        type="number"
-                        min={0}
-                        max={10}
-                        step={0.1}
-                        value={onlineCardSurchargePercent}
-                        onChange={(e) => setOnlineCardSurchargePercent(Math.max(0, Number(e.target.value) || 0))}
-                        className="w-full rounded-md border border-gray-300 px-2 py-1.5 text-sm"
-                      />
-                      <span className="text-xs text-gray-500">Applied at checkout when paying by card online</span>
-                    </div>
-                    <div>
-                      <label className="block text-sm font-medium text-gray-700 mb-1">POS card surcharge %</label>
-                      <input
-                        type="number"
-                        min={0}
-                        max={10}
-                        step={0.1}
-                        value={posCardSurchargePercent}
-                        onChange={(e) => setPosCardSurchargePercent(Math.max(0, Number(e.target.value) || 0))}
-                        className="w-full rounded-md border border-gray-300 px-2 py-1.5 text-sm"
-                      />
-                      <span className="text-xs text-gray-500">Applied in POS when payment method is card or mix</span>
+                        <option value="auto">Auto (use date: Sunday or public holiday list)</option>
+                        <option value="sunday">Force Sunday surcharge today</option>
+                        <option value="public_holiday">Force public holiday surcharge today</option>
+                        <option value="none">No surcharge today</option>
+                      </select>
                     </div>
                   </div>
-                </div>
-                <div>
-                  <label className="block text-sm font-medium text-gray-700 mb-1">Manual override for today</label>
-                  <p className="text-xs text-gray-500 mb-2">Force which surcharge applies in POS today (or use Auto to use date).</p>
-                  <select
-                    value={surchargeManualOverride}
-                    onChange={(e) => setSurchargeManualOverride(e.target.value as 'auto' | 'sunday' | 'public_holiday' | 'none')}
-                    className="rounded-md border border-gray-300 px-3 py-2 text-sm"
-                  >
-                    <option value="auto">Auto (use date: Sunday or public holiday list)</option>
-                    <option value="sunday">Force Sunday surcharge today</option>
-                    <option value="public_holiday">Force public holiday surcharge today</option>
-                    <option value="none">No surcharge today</option>
-                  </select>
+                  <div>
+                    <h3 className="font-medium text-gray-900 mb-3">Card payment surcharges</h3>
+                    <p className="text-xs text-gray-500 mb-3">Percentage added when customer pays by card. Online surcharge applies to the customer cart/checkout; POS surcharge applies to in-store card payments.</p>
+                    <div className="space-y-4">
+                      <div>
+                        <label className="block text-sm font-medium text-gray-700 mb-1">Online payment (card) surcharge %</label>
+                        <input
+                          type="number"
+                          min={0}
+                          max={10}
+                          step={0.1}
+                          value={onlineCardSurchargePercent}
+                          onChange={(e) => setOnlineCardSurchargePercent(Math.max(0, Number(e.target.value) || 0))}
+                          className="w-full rounded-md border border-gray-300 px-2 py-1.5 text-sm"
+                        />
+                        <span className="text-xs text-gray-500">Applied at checkout for online card payments</span>
+                      </div>
+                      <div>
+                        <label className="block text-sm font-medium text-gray-700 mb-1">POS card surcharge %</label>
+                        <input
+                          type="number"
+                          min={0}
+                          max={10}
+                          step={0.1}
+                          value={posCardSurchargePercent}
+                          onChange={(e) => setPosCardSurchargePercent(Math.max(0, Number(e.target.value) || 0))}
+                          className="w-full rounded-md border border-gray-300 px-2 py-1.5 text-sm"
+                        />
+                        <span className="text-xs text-gray-500">Applied in POS when payment method is card or mix</span>
+                      </div>
+                    </div>
+                  </div>
                 </div>
                 <Button type="submit" disabled={surchargeSaving}>{surchargeSaving ? 'Saving…' : 'Save surcharges'}</Button>
               </form>
@@ -1213,7 +1244,7 @@ export function RestaurantDashboard({ restaurantId: restaurantIdProp }: { restau
                             className="w-20 rounded border border-gray-300 px-2 py-1 text-sm"
                           />
                         </td>
-                        <td className="px-4 py-3 text-sm">A${priceInclGst(Number(i.price)).toFixed(2)}</td>
+                        <td className="px-4 py-3 text-sm">A${Number(i.price).toFixed(2)}</td>
                         <td className="px-4 py-3 text-right">
                           <Button
                             type="button"
@@ -1315,7 +1346,7 @@ export function RestaurantDashboard({ restaurantId: restaurantIdProp }: { restau
                             </span>
                           </td>
                           <td className="px-6 py-4 whitespace-nowrap text-sm text-gray-500">
-                            A${priceInclGst(item.price).toFixed(2)} (incl. GST)
+                            A${Number(item.price).toFixed(2)}
                           </td>
                           <td className="px-6 py-4 text-sm text-gray-600 max-w-[200px]">
                             {item.customizations && item.customizations.length > 0 ? (

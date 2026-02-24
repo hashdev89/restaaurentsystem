@@ -34,7 +34,8 @@ import {
   Home,
   Settings,
   BarChart3,
-  Headphones
+  Headphones,
+  GripVertical
 } from 'lucide-react'
 import { useNotification } from '../providers/NotificationProvider'
 import { NotificationCenter } from '../NotificationCenter'
@@ -73,6 +74,19 @@ interface POSCategory {
   bgColor: string
   subItems: POSSubItem[]
 }
+
+/** Preset colors for food categories (Tailwind classes). */
+const CATEGORY_COLOR_OPTIONS: { value: string; bgColor: string; color: string }[] = [
+  { value: 'orange', bgColor: 'bg-orange-500', color: 'text-orange-600' },
+  { value: 'green', bgColor: 'bg-green-500', color: 'text-green-600' },
+  { value: 'blue', bgColor: 'bg-blue-500', color: 'text-blue-600' },
+  { value: 'red', bgColor: 'bg-red-500', color: 'text-red-600' },
+  { value: 'amber', bgColor: 'bg-amber-500', color: 'text-amber-600' },
+  { value: 'purple', bgColor: 'bg-purple-500', color: 'text-purple-600' },
+  { value: 'teal', bgColor: 'bg-teal-500', color: 'text-teal-600' },
+  { value: 'pink', bgColor: 'bg-pink-500', color: 'text-pink-600' },
+  { value: 'gray', bgColor: 'bg-gray-500', color: 'text-gray-700' },
+]
 
 interface POSSubItem {
   id: string
@@ -630,12 +644,14 @@ function buildCategoriesFromMenuItems(items: { id: string; name: string; descrip
     const list = byCategory.get(cat)
     if (list) list.push(item)
   }
-  return Array.from(byCategory.entries()).map(([name, catItems]) => ({
+  return Array.from(byCategory.entries()).map(([name, catItems], idx) => {
+    const colorOpt = CATEGORY_COLOR_OPTIONS[idx % CATEGORY_COLOR_OPTIONS.length]
+    return {
     id: `cat_${name.replace(/\s+/g, '_')}`,
     name,
     icon: UtensilsCrossed,
-    color: 'text-gray-700',
-    bgColor: 'bg-gray-500',
+    color: colorOpt.color,
+    bgColor: colorOpt.bgColor,
     subItems: catItems.map((i) => ({
       id: i.id,
       name: i.name,
@@ -647,7 +663,8 @@ function buildCategoriesFromMenuItems(items: { id: string; name: string; descrip
       sizes: i.sizes && i.sizes.length > 0 ? i.sizes : undefined,
       customizations: i.customizations && i.customizations.length > 0 ? i.customizations : undefined,
     })),
-  }))
+  }
+  })
 }
 
 const stripePublishableKey = process.env.NEXT_PUBLIC_STRIPE_PUBLISHABLE_KEY || ''
@@ -781,6 +798,11 @@ export function POSSystem({ restaurantId: restaurantIdProp }: { restaurantId?: s
   const [categories, setCategories] = useState<POSCategory[]>(() =>
     POS_CATEGORIES.map(cat => ({ ...cat, subItems: cat.subItems.map(s => ({ ...s })) }))
   )
+  // Drag-and-drop reorder (Items screen)
+  const [dragCategoryIndex, setDragCategoryIndex] = useState<number | null>(null)
+  const [dragItem, setDragItem] = useState<{ categoryId: string; itemIndex: number } | null>(null)
+  // New category color when adding item with new category (POS only)
+  const [newCategoryColor, setNewCategoryColor] = useState<string>('orange')
 
   // POS access gate when linked to restaurant: enabled flag + optional 4-digit PIN
   const [posAccess, setPosAccess] = useState<{ posEnabled: boolean; posPinRequired: boolean } | null>(null)
@@ -1547,12 +1569,6 @@ export function POSSystem({ restaurantId: restaurantIdProp }: { restaurantId?: s
         <span>Total</span>
         <span>A$${totalBeforeCardSurcharge.toFixed(2)}</span>
       </div>
-      ${(paymentMethod === 'card' || paymentMethod === 'mix') && posCardSurchargeAmount > 0 ? `
-      <div class="total-row">
-        <span>Card payment surcharge:</span>
-        <span>A$${posCardSurchargeAmount.toFixed(2)}</span>
-      </div>
-      ` : ''}
       ${tip > 0 ? `
       <div class="total-row">
         <span>Tip${tipPercentage ? ` (${tipPercentage}%)` : ''}:</span>
@@ -1993,7 +2009,7 @@ export function POSSystem({ restaurantId: restaurantIdProp }: { restaurantId?: s
     setShowItemModal(true)
   }
 
-  const handleSaveItem = async (data: Partial<POSSubItem> & { categoryId?: string; newCategoryName?: string; removeOptions?: CustomizationOption[]; extras?: CustomizationOption[]; sizes?: { name: string; price: number }[] }) => {
+  const handleSaveItem = async (data: Partial<POSSubItem> & { categoryId?: string; newCategoryName?: string; newCategoryColor?: string; removeOptions?: CustomizationOption[]; extras?: CustomizationOption[]; sizes?: { name: string; price: number }[] }) => {
     const categoryId = data.categoryId ?? categories[0]?.id ?? ''
     const name = (data.name ?? '').trim()
     const description = (data.description ?? '').trim()
@@ -2077,6 +2093,7 @@ export function POSSystem({ restaurantId: restaurantIdProp }: { restaurantId?: s
       )
     } else if (isNewCategory) {
       const newCatId = `cat_${Date.now()}`
+      const colorOpt = CATEGORY_COLOR_OPTIONS.find((o) => o.value === (data.newCategoryColor ?? newCategoryColor)) ?? CATEGORY_COLOR_OPTIONS[0]
       const newItem: POSSubItem = {
         id: `item_${Date.now()}`,
         name,
@@ -2090,7 +2107,7 @@ export function POSSystem({ restaurantId: restaurantIdProp }: { restaurantId?: s
       }
       setCategories((prev) => [
         ...prev,
-        { id: newCatId, name: newCatName, icon: UtensilsCrossed, color: 'text-gray-700', bgColor: 'bg-gray-500', subItems: [newItem] },
+        { id: newCatId, name: newCatName, icon: UtensilsCrossed, color: colorOpt.color, bgColor: colorOpt.bgColor, subItems: [newItem] },
       ])
     } else {
       const newItem: POSSubItem = {
@@ -2121,6 +2138,39 @@ export function POSSystem({ restaurantId: restaurantIdProp }: { restaurantId?: s
     setShowItemModal(false)
     setEditingItem(null)
     setItemFormData({})
+  }
+
+  // Reorder categories (drag-and-drop on Items screen)
+  const moveCategory = (fromIndex: number, toIndex: number) => {
+    if (fromIndex === toIndex || toIndex < 0 || toIndex >= categories.length) return
+    setCategories((prev) => {
+      const next = [...prev]
+      const [removed] = next.splice(fromIndex, 1)
+      next.splice(toIndex, 0, removed)
+      return next
+    })
+  }
+
+  // Reorder item within a category (drag-and-drop on Items screen)
+  const moveItemInCategory = (categoryId: string, fromIndex: number, toIndex: number) => {
+    setCategories((prev) =>
+      prev.map((cat) => {
+        if (cat.id !== categoryId) return cat
+        const items = [...cat.subItems]
+        if (fromIndex === toIndex || toIndex < 0 || toIndex >= items.length) return cat
+        const [removed] = items.splice(fromIndex, 1)
+        items.splice(toIndex, 0, removed)
+        return { ...cat, subItems: items }
+      })
+    )
+  }
+
+  // Update category color (Items screen header or new category in form)
+  const setCategoryColor = (categoryId: string, colorValue: string) => {
+    const opt = CATEGORY_COLOR_OPTIONS.find((o) => o.value === colorValue) ?? CATEGORY_COLOR_OPTIONS[0]
+    setCategories((prev) =>
+      prev.map((c) => (c.id === categoryId ? { ...c, color: opt.color, bgColor: opt.bgColor } : c))
+    )
   }
 
   // Gate: when linked to restaurant, check enabled + 4-digit PIN
@@ -2374,12 +2424,10 @@ export function POSSystem({ restaurantId: restaurantIdProp }: { restaurantId?: s
                             <p className="text-xl font-bold text-orange-600 mb-1">
                               A${(Math.min(...item.sizes.map(s => s.price)) * (1 + GST_RATE)).toFixed(2)}
                             </p>
-                            <p className="text-xs text-gray-500 mb-2">incl. GST</p>
                           </>
                         ) : (
                           <>
                             <p className="text-xl font-bold text-orange-600 mb-1">A${(item.basePrice * (1 + GST_RATE)).toFixed(2)}</p>
-                            <p className="text-xs text-gray-500 mb-2">incl. GST</p>
                           </>
                         )}
                       </div>
@@ -3071,31 +3119,117 @@ export function POSSystem({ restaurantId: restaurantIdProp }: { restaurantId?: s
                   </Button>
                 </div>
                 <div className="flex-1 overflow-y-auto p-6">
+                  <p className="text-sm text-gray-500 mb-4">Drag categories or items to reorder. Use the color dots to set category color.</p>
                   <div className="space-y-4">
-                    {categories.map((category) => (
-                      <div key={category.id} className="mb-8">
+                    {categories.map((category, catIndex) => (
+                      <div
+                        key={category.id}
+                        className={cn(
+                          'mb-8 rounded-xl border-2 transition-shadow',
+                          dragCategoryIndex === catIndex ? 'border-orange-400 bg-orange-50/50 shadow-lg' : 'border-transparent'
+                        )}
+                        onDragOver={(e) => {
+                          e.preventDefault()
+                          e.dataTransfer.dropEffect = 'move'
+                        }}
+                        onDrop={(e) => {
+                          e.preventDefault()
+                          const raw = e.dataTransfer.getData('text/plain')
+                          if (raw.startsWith('category:')) {
+                            const from = parseInt(raw.slice(9), 10)
+                            if (!Number.isNaN(from)) moveCategory(from, catIndex)
+                          }
+                          setDragCategoryIndex(null)
+                        }}
+                      >
                         <div className="flex items-center gap-3 mb-4">
-                          <div className={cn("p-3 rounded-lg", category.bgColor)}>
+                          <span
+                            className="cursor-grab active:cursor-grabbing touch-none p-1 text-gray-400 hover:text-gray-600 rounded"
+                            title="Drag to reorder category"
+                            draggable
+                            onDragStart={(e) => {
+                              setDragCategoryIndex(catIndex)
+                              e.dataTransfer.setData('text/plain', `category:${catIndex}`)
+                              e.dataTransfer.effectAllowed = 'move'
+                            }}
+                            onDragEnd={() => setDragCategoryIndex(null)}
+                          >
+                            <GripVertical className="w-5 h-5" />
+                          </span>
+                          <div className={cn('p-3 rounded-lg', category.bgColor)}>
                             <category.icon className="w-6 h-6 text-white" />
                           </div>
                           <h3 className="text-xl font-bold text-gray-900">{category.name}</h3>
                           <Badge variant="info">{category.subItems.length} items</Badge>
+                          <div className="flex items-center gap-1 ml-2" title="Category color">
+                            {CATEGORY_COLOR_OPTIONS.map((opt) => (
+                              <button
+                                key={opt.value}
+                                type="button"
+                                title={opt.value}
+                                className={cn(
+                                  'w-6 h-6 rounded-full border-2 transition-transform hover:scale-110',
+                                  opt.bgColor,
+                                  category.bgColor === opt.bgColor ? 'border-gray-900 ring-2 ring-offset-1 ring-gray-400' : 'border-transparent'
+                                )}
+                                onClick={() => setCategoryColor(category.id, opt.value)}
+                              />
+                            ))}
+                          </div>
                         </div>
                         <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-4">
-                          {category.subItems.map((item) => (
-                            <div key={item.id} className="bg-gray-50 border-2 border-gray-200 rounded-xl p-4">
+                          {category.subItems.map((item, itemIndex) => (
+                            <div
+                              key={item.id}
+                              className={cn(
+                                'bg-gray-50 border-2 border-gray-200 rounded-xl p-4 transition-shadow',
+                                dragItem?.categoryId === category.id && dragItem?.itemIndex === itemIndex && 'border-orange-400 shadow-md'
+                              )}
+                              draggable
+                              onDragStart={(e) => {
+                                setDragItem({ categoryId: category.id, itemIndex })
+                                e.dataTransfer.setData('text/plain', `item:${category.id}:${itemIndex}`)
+                                e.dataTransfer.effectAllowed = 'move'
+                              }}
+                              onDragOver={(e) => {
+                                e.preventDefault()
+                                e.stopPropagation()
+                                e.dataTransfer.dropEffect = 'move'
+                              }}
+                              onDragEnd={() => setDragItem(null)}
+                              onDrop={(e) => {
+                                e.preventDefault()
+                                e.stopPropagation()
+                                const raw = e.dataTransfer.getData('text/plain')
+                                if (raw.startsWith('item:')) {
+                                  const [, cid, idxStr] = raw.split(':')
+                                  const fromIdx = parseInt(idxStr, 10)
+                                  if (cid === category.id && !Number.isNaN(fromIdx)) moveItemInCategory(category.id, fromIdx, itemIndex)
+                                }
+                                setDragItem(null)
+                              }}
+                            >
                               <div className="flex items-start justify-between mb-3">
-                                <div className="flex-1">
-                                  <h4 className="font-bold text-gray-900 mb-1">{item.name}</h4>
-                                  <p className="text-xs text-gray-600 mb-2 line-clamp-2">{item.description}</p>
-                                  <p className="text-lg font-bold text-orange-600">A${(item.basePrice * (1 + GST_RATE)).toFixed(2)}</p>
-                                  <div className="flex items-center gap-2 mt-2">
-                                    {item.popular && <Badge variant="warning" className="text-xs">Popular</Badge>}
-                                    {item.isAvailable ? (
-                                      <Badge variant="success" className="text-xs">Available</Badge>
-                                    ) : (
-                                      <Badge variant="danger" className="text-xs">Unavailable</Badge>
-                                    )}
+                                <div className="flex-1 flex items-start gap-2">
+                                  <span
+                                    className="cursor-grab active:cursor-grabbing touch-none mt-0.5 text-gray-400 hover:text-gray-600 shrink-0"
+                                    title="Drag to reorder item"
+                                    onPointerDown={(e) => e.stopPropagation()}
+                                  >
+                                    <GripVertical className="w-4 h-4" />
+                                  </span>
+                                  <div>
+                                    <h4 className="font-bold text-gray-900 mb-1">{item.name}</h4>
+                                    <p className="text-xs text-gray-600 mb-2 line-clamp-2">{item.description}</p>
+                                    <p className="text-lg font-bold text-orange-600">A${(item.basePrice * (1 + GST_RATE)).toFixed(2)}</p>
+                                    <div className="flex items-center gap-2 mt-2">
+                                      {item.popular && <Badge variant="warning" className="text-xs">Popular</Badge>}
+                                      {item.isAvailable ? (
+                                        <Badge variant="success" className="text-xs">Available</Badge>
+                                      ) : (
+                                        <Badge variant="danger" className="text-xs">Unavailable</Badge>
+                                      )}
+                                    </div>
                                   </div>
                                 </div>
                                 {item.image && (
@@ -3447,6 +3581,12 @@ export function POSSystem({ restaurantId: restaurantIdProp }: { restaurantId?: s
                     <span>A${surchargeAmount.toFixed(2)}</span>
                   </div>
                 )}
+                {(paymentMethod === 'card' || paymentMethod === 'mix') && posCardSurchargeAmount > 0 && (
+                  <div className="flex justify-between text-sm text-gray-600">
+                    <span>Card surcharge ({posSurcharge.posCardSurchargePercent}%)</span>
+                    <span>A${posCardSurchargeAmount.toFixed(2)}</span>
+                  </div>
+                )}
                 <div className="flex justify-between text-xl font-bold text-gray-900 pt-2 border-t-2 border-gray-300">
                   <span>Total</span>
                   <span className="text-orange-600">A${totalBeforeCardSurcharge.toFixed(2)}</span>
@@ -3454,18 +3594,12 @@ export function POSSystem({ restaurantId: restaurantIdProp }: { restaurantId?: s
               </div>
             </div>
 
-            {/* Card surcharge & amount to pay – only when Card or Mix selected */}
+            {/* Amount to pay when Card or Mix (surcharge included in total; no separate surcharge line) */}
             {(paymentMethod === 'card' || paymentMethod === 'mix') && posCardSurchargeAmount > 0 && (
               <div className="bg-amber-50 border border-amber-200 rounded-lg p-4">
-                <div className="space-y-1">
-                  <div className="flex justify-between text-sm text-amber-800">
-                    <span>Card payment surcharge</span>
-                    <span>A${posCardSurchargeAmount.toFixed(2)}</span>
-                  </div>
-                  <div className="flex justify-between text-lg font-bold text-amber-900 pt-2 border-t border-amber-300">
-                    <span>Amount to pay</span>
-                    <span>A${total.toFixed(2)}</span>
-                  </div>
+                <div className="flex justify-between text-lg font-bold text-amber-900">
+                  <span>Amount to pay</span>
+                  <span>A${total.toFixed(2)}</span>
                 </div>
               </div>
             )}
@@ -3686,6 +3820,26 @@ export function POSSystem({ restaurantId: restaurantIdProp }: { restaurantId?: s
           onClose={closeItemModal}
           className="max-w-md max-h-[90vh] overflow-y-auto"
         >
+          {!editingItem && (
+            <div className="mb-4 pb-4 border-b border-gray-200">
+              <label className="block text-sm font-medium text-gray-700 mb-2">New category color (when you create a new category)</label>
+              <div className="flex flex-wrap gap-2">
+                {CATEGORY_COLOR_OPTIONS.map((opt) => (
+                  <button
+                    key={opt.value}
+                    type="button"
+                    title={opt.value}
+                    className={cn(
+                      'w-8 h-8 rounded-full border-2 transition-transform hover:scale-110',
+                      opt.bgColor,
+                      newCategoryColor === opt.value ? 'border-gray-900 ring-2 ring-offset-1 ring-gray-400' : 'border-transparent'
+                    )}
+                    onClick={() => setNewCategoryColor(opt.value)}
+                  />
+                ))}
+              </div>
+            </div>
+          )}
           <MenuItemForm
             initialData={editingItem ? (() => {
               const cat = categories.find((c) => c.subItems.some((s) => s.id === editingItem.id))
@@ -3724,6 +3878,7 @@ export function POSSystem({ restaurantId: restaurantIdProp }: { restaurantId?: s
                 isAvailable: data.isAvailable,
                 categoryId,
                 newCategoryName,
+                newCategoryColor: categoryId === '__new__' ? newCategoryColor : undefined,
                 removeOptions,
                 extras,
                 sizes: data.sizes,
@@ -3872,10 +4027,7 @@ export function POSSystem({ restaurantId: restaurantIdProp }: { restaurantId?: s
             )}
             <p className="text-sm font-semibold text-gray-900">Total: A${totalBeforeCardSurcharge.toFixed(2)}</p>
             {(paymentMethod === 'card' || paymentMethod === 'mix') && posCardSurchargeAmount > 0 && (
-              <>
-                <p className="text-sm text-amber-700">Card surcharge: A${posCardSurchargeAmount.toFixed(2)}</p>
-                <p className="text-base font-bold text-orange-600">Amount to pay: A${total.toFixed(2)}</p>
-              </>
+              <p className="text-base font-bold text-orange-600">Amount to pay: A${total.toFixed(2)}</p>
             )}
           </div>
         </div>
