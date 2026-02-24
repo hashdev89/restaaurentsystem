@@ -212,6 +212,14 @@ export async function GET(request: NextRequest) {
       }
     }
     let orders = Array.from(byId.values())
+    // Ensure strict one order per id (dedupe by id in case of any edge cases)
+    const seenIds = new Set<string>()
+    orders = orders.filter((o) => {
+      const id = (o as { id?: string })?.id
+      if (!id || seenIds.has(id)) return false
+      seenIds.add(id)
+      return true
+    })
 
     // Enrich order_items with menu item customizations (Remove options + Extras) for display
     const menuItemIds = [...new Set(

@@ -9,7 +9,7 @@ import { useCart } from './providers/CartProvider'
 import { useNotification } from './providers/NotificationProvider'
 import { priceInclGst } from '@/lib/gst'
 
-const SPICE_LEVELS = ['None', 'Mild', 'Medium', 'Hot', 'Extra Hot'] as const
+const SPICE_LEVELS = ['Mild', 'Medium', 'Hot', 'Extra Hot'] as const
 
 function sizeToShortLabel(name: string): string {
   const n = name.toLowerCase()

@@ -78,7 +78,13 @@ export function normalizeOrder(row: SupabaseOrderRow): Order {
 }
 
 export function normalizeOrders(rows: SupabaseOrderRow[]): Order[] {
-  return rows.map(normalizeOrder)
+  const orders = rows.map(normalizeOrder)
+  // Deduplicate by order id (API/PostgREST can return same order multiple times when joining order_items)
+  const byId = new Map<string, Order>()
+  for (const o of orders) {
+    if (!byId.has(o.id)) byId.set(o.id, o)
+  }
+  return Array.from(byId.values())
 }
 
 /** Map frontend mock restaurant id to Supabase UUID when needed */
