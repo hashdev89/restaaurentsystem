@@ -588,10 +588,16 @@ export function Checkout() {
                   <span>A${baseTotalBeforeCard.toFixed(2)}</span>
                 </div>
                 {paymentMethod === 'pay-now' && onlineCardSurchargePercent > 0 && (
-                  <div className="flex justify-between font-bold text-lg text-gray-900 pt-2 border-t-2 border-gray-300 mb-6">
-                    <span>Grand Total</span>
-                    <span>A${finalTotal.toFixed(2)}</span>
-                  </div>
+                  <>
+                    <div className="flex justify-between text-gray-600 text-sm">
+                      <span>Card surcharge ({onlineCardSurchargePercent}%)</span>
+                      <span>A${cardSurchargeAmount.toFixed(2)}</span>
+                    </div>
+                    <div className="flex justify-between font-bold text-lg text-gray-900 pt-2 border-t-2 border-gray-300 mb-6">
+                      <span>Grand Total</span>
+                      <span>A${finalTotal.toFixed(2)}</span>
+                    </div>
+                  </>
                 )}
                 {!(paymentMethod === 'pay-now' && onlineCardSurchargePercent > 0) && (
                   <div className="flex justify-between font-bold text-lg text-gray-900 pt-2 border-t-2 border-gray-300 mb-6">

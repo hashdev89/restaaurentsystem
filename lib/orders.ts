@@ -17,6 +17,7 @@ export interface SupabaseOrderRow {
   estimated_ready_time: string | null
   created_at: string
   updated_at: string
+  receipt_no?: string | null
   order_items?: SupabaseOrderItemRow[]
 }
 
@@ -73,7 +74,8 @@ export function normalizeOrder(row: SupabaseOrderRow): Order {
     squarePaymentId: row.square_payment_id ?? undefined,
     estimatedReadyTime: row.estimated_ready_time ?? undefined,
     createdAt: row.created_at,
-    updatedAt: row.updated_at
+    updatedAt: row.updated_at,
+    ...(row.receipt_no != null && row.receipt_no !== '' ? { receiptNo: row.receipt_no } : {})
   }
 }
 

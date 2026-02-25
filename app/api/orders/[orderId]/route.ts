@@ -8,9 +8,9 @@ export async function PATCH(
 ) {
   try {
     const body = await request.json()
-    const { status, estimatedReadyTime } = body
+    const { status, estimatedReadyTime, receiptNo } = body
 
-    const updateData: { updated_at: string; status?: string; estimated_ready_time?: string } = {
+    const updateData: { updated_at: string; status?: string; estimated_ready_time?: string; receipt_no?: string } = {
       updated_at: new Date().toISOString()
     }
 
@@ -20,6 +20,9 @@ export async function PATCH(
 
     if (estimatedReadyTime) {
       updateData.estimated_ready_time = estimatedReadyTime
+    }
+    if (typeof receiptNo === 'string' && receiptNo.trim()) {
+      updateData.receipt_no = receiptNo.trim()
     }
 
     const { data, error } = await supabase

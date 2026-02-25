@@ -70,7 +70,7 @@ export function RestaurantDashboard({ restaurantId: restaurantIdProp }: { restau
     return () => { cancelled = true }
   }, [envOrPropId])
   const [menuItems, setMenuItems] = useState<MenuItem[]>([])
-  const [activeTab, setActiveTab] = useState<'pending' | 'ready' | 'history' | 'menu' | 'tables' | 'stock' | 'staff' | 'shift' | 'access' | 'surcharges' | 'services'>('pending')
+  const [activeTab, setActiveTab] = useState<'pending' | 'ready' | 'history' | 'menu' | 'tables' | 'stock' | 'staff' | 'shift' | 'access' | 'surcharges' | 'services' | 'receipt'>('pending')
   const [isModalOpen, setIsModalOpen] = useState(false)
   const [editingItem, setEditingItem] = useState<Partial<MenuItem> | null>(null)
   const CATEGORY_OPTIONS_NEW = '__new_category__'
@@ -110,6 +110,14 @@ export function RestaurantDashboard({ restaurantId: restaurantIdProp }: { restau
   const [serviceTypes, setServiceTypes] = useState<('dine-in' | 'delivery' | 'takeaway')[]>([])
   const [serviceTypesSaving, setServiceTypesSaving] = useState(false)
   const [restaurantName, setRestaurantName] = useState('')
+  const [receiptBusinessName, setReceiptBusinessName] = useState('')
+  const [receiptAbn, setReceiptAbn] = useState('')
+  const [receiptShowQrCode, setReceiptShowQrCode] = useState(true)
+  const [receiptFooterText, setReceiptFooterText] = useState('')
+  const [receiptNumberPrefix, setReceiptNumberPrefix] = useState('001')
+  const [receiptAddress, setReceiptAddress] = useState('')
+  const [receiptPhone, setReceiptPhone] = useState('')
+  const [receiptSaving, setReceiptSaving] = useState(false)
 
   // Fetch restaurant name for dashboard title
   useEffect(() => {
@@ -338,6 +346,26 @@ export function RestaurantDashboard({ restaurantId: restaurantIdProp }: { restau
           }
         })
         .catch(() => setServiceTypes([]))
+    }
+  }, [activeTab, currentRestaurantId])
+
+  useEffect(() => {
+    if (activeTab === 'receipt' && currentRestaurantId) {
+      fetch(`/api/restaurants/${currentRestaurantId}`)
+        .then((res) => res.ok ? res.json() : null)
+        .then((data) => {
+          const r = data?.restaurant
+          if (r) {
+            setReceiptBusinessName(r.receiptBusinessName ?? r.name ?? '')
+            setReceiptAbn(r.receiptAbn ?? '')
+            setReceiptShowQrCode(r.receiptShowQrCode !== false)
+            setReceiptFooterText(r.receiptFooterText ?? '')
+            setReceiptNumberPrefix((r.receiptNumberPrefix ?? '001').toString().trim() || '001')
+            setReceiptAddress(r.receiptAddress ?? r.address ?? '')
+            setReceiptPhone(r.receiptPhone ?? r.phone ?? '')
+          }
+        })
+        .catch(() => undefined)
     }
   }, [activeTab, currentRestaurantId])
 
@@ -843,10 +871,193 @@ export function RestaurantDashboard({ restaurantId: restaurantIdProp }: { restau
             <Store className="w-4 h-4 mr-2" />
             Service types
           </button>
+          <button
+            onClick={() => setActiveTab('receipt')}
+            className={`flex items-center px-4 py-2 rounded-md font-medium transition-colors whitespace-nowrap ${
+              activeTab === 'receipt'
+                ? 'bg-orange-600 text-white'
+                : 'bg-white text-gray-600 hover:bg-gray-50'
+            }`}
+          >
+            <Printer className="w-4 h-4 mr-2" />
+            Receipt
+          </button>
         </div>
 
         {/* Tab Content */}
-        {activeTab === 'services' ? (
+        {activeTab === 'receipt' ? (
+          <div>
+            <h2 className="text-lg font-semibold text-gray-900 mb-2">Receipt / Bill customization</h2>
+            <p className="text-sm text-gray-600 mb-4">Customize how your receipts and bills appear when printed from the POS. These settings apply to all receipts for this restaurant. Enable the QR code so customers can scan to view their order status.</p>
+            <div className="grid grid-cols-1 lg:grid-cols-2 gap-8 max-w-5xl">
+              <Card className="p-6 h-fit">
+                <form
+                  onSubmit={async (e) => {
+                    e.preventDefault()
+                    if (!currentRestaurantId) return
+                    setReceiptSaving(true)
+                    try {
+                      const res = await fetch(`/api/restaurants/${currentRestaurantId}`, {
+                        method: 'PATCH',
+                        headers: { 'Content-Type': 'application/json' },
+                        body: JSON.stringify({
+                          receiptBusinessName: receiptBusinessName.trim() || null,
+                          receiptAbn: receiptAbn.trim() || null,
+                          receiptShowQrCode: receiptShowQrCode,
+                          receiptFooterText: receiptFooterText.trim() || null,
+                          receiptNumberPrefix: receiptNumberPrefix.trim() || null,
+                          receiptAddress: receiptAddress.trim() || null,
+                          receiptPhone: receiptPhone.trim() || null,
+                        }),
+                      })
+                      if (!res.ok) throw new Error('Failed to save')
+                      success('Receipt settings saved', 'POS receipts will use these options.')
+                    } catch (e) {
+                      error('Could not save', e instanceof Error ? e.message : 'Failed to save receipt settings')
+                    } finally {
+                      setReceiptSaving(false)
+                    }
+                  }}
+                  className="space-y-6"
+                >
+                  <div>
+                    <label className="block text-sm font-medium text-gray-700 mb-1">Business name on receipt</label>
+                    <Input
+                      value={receiptBusinessName}
+                      onChange={(e) => setReceiptBusinessName(e.target.value)}
+                      placeholder="e.g. Your Restaurant Name"
+                    />
+                    <p className="text-xs text-gray-500 mt-1">Leave blank to use your restaurant name.</p>
+                  </div>
+                  <div>
+                    <label className="block text-sm font-medium text-gray-700 mb-1">ABN (optional)</label>
+                    <Input
+                      value={receiptAbn}
+                      onChange={(e) => setReceiptAbn(e.target.value)}
+                      placeholder="e.g. 12 345 678 901"
+                    />
+                  </div>
+                  <div>
+                    <label className="block text-sm font-medium text-gray-700 mb-1">Address on receipt</label>
+                    <Input
+                      value={receiptAddress}
+                      onChange={(e) => setReceiptAddress(e.target.value)}
+                      placeholder="e.g. 123 Main St, City"
+                    />
+                    <p className="text-xs text-gray-500 mt-1">Shown after business name on ticket.</p>
+                  </div>
+                  <div>
+                    <label className="block text-sm font-medium text-gray-700 mb-1">Telephone on receipt</label>
+                    <Input
+                      value={receiptPhone}
+                      onChange={(e) => setReceiptPhone(e.target.value)}
+                      placeholder="e.g. 1300 123 456"
+                    />
+                  </div>
+                  <div>
+                    <label className="block text-sm font-medium text-gray-700 mb-1">Receipt number prefix</label>
+                    <Input
+                      value={receiptNumberPrefix}
+                      onChange={(e) => setReceiptNumberPrefix(e.target.value)}
+                      placeholder="e.g. 001"
+                    />
+                    <p className="text-xs text-gray-500 mt-1">Receipt numbers will be e.g. {receiptNumberPrefix.trim() || '001'}-0001, {receiptNumberPrefix.trim() || '001'}-0002 (auto-generated).</p>
+                  </div>
+                  <div className="flex items-center gap-3">
+                    <input
+                      type="checkbox"
+                      id="receipt-qr"
+                      checked={receiptShowQrCode}
+                      onChange={(e) => setReceiptShowQrCode(e.target.checked)}
+                      className="rounded border-gray-300 text-orange-600"
+                    />
+                    <label htmlFor="receipt-qr" className="text-sm font-medium text-gray-700">
+                      Show QR code at end of receipt — links to order status when scanned
+                    </label>
+                  </div>
+                  <div>
+                    <label className="block text-sm font-medium text-gray-700 mb-1">Footer text (optional)</label>
+                    <textarea
+                      value={receiptFooterText}
+                      onChange={(e) => setReceiptFooterText(e.target.value)}
+                      placeholder="e.g. Thank you for your visit! GST included in prices."
+                      rows={2}
+                      className="w-full rounded-md border border-gray-300 px-3 py-2 text-sm"
+                    />
+                  </div>
+                  <Button type="submit" disabled={receiptSaving}>
+                    {receiptSaving ? 'Saving…' : 'Save receipt settings'}
+                  </Button>
+                </form>
+              </Card>
+
+              {/* Bill preview */}
+              <div className="lg:sticky lg:top-4">
+                <p className="text-sm font-medium text-gray-700 mb-2">Bill preview</p>
+                <div className="bg-white border-2 border-gray-200 rounded-lg shadow-sm p-4 font-mono text-xs" style={{ maxWidth: '280px' }}>
+                  <div className="pb-3 mb-3 text-center">
+                    <div className="font-bold text-sm uppercase tracking-wide text-gray-900">
+                      {receiptBusinessName.trim() || restaurantName || 'Your Business Name'}
+                    </div>
+                    {receiptAddress.trim() ? (
+                      <div className="text-gray-600 mt-1 text-[10px]">{receiptAddress.trim()}</div>
+                    ) : null}
+                    {receiptPhone.trim() ? (
+                      <div className="text-gray-600 mt-0.5">Ph: {receiptPhone.trim()}</div>
+                    ) : null}
+                    {receiptAbn.trim() ? (
+                      <div className="text-gray-600 mt-0.5">ABN: {receiptAbn.trim()}</div>
+                    ) : null}
+                  </div>
+                  <div className="text-gray-500 mb-3">
+                    {new Date().toLocaleString('en-AU', { dateStyle: 'short', timeStyle: 'short' })}
+                  </div>
+                  <div className="mb-2">
+                    <div className="flex justify-between mb-1">
+                      <span>Receipt No:</span>
+                      <span>{(receiptNumberPrefix.trim() || '001')}-0001</span>
+                    </div>
+                  </div>
+                  <div className="py-3 mb-3 space-y-1">
+                    <div className="flex justify-between">
+                      <span>Sample Item x 1</span>
+                      <span>A$10.00</span>
+                    </div>
+                    <div className="flex justify-between">
+                      <span>Another Item x 2</span>
+                      <span>A$24.00</span>
+                    </div>
+                  </div>
+                  <div className="space-y-0.5 py-3 mb-3">
+                    <div className="flex justify-between text-gray-600">
+                      <span>GST included (10%)</span>
+                      <span>A$3.09</span>
+                    </div>
+                    <div className="flex justify-between font-semibold pt-1">
+                      <span>Total</span>
+                      <span>A$34.00</span>
+                    </div>
+                  </div>
+                  <div className="pt-3 mt-3 text-center text-gray-600">
+                    {(receiptFooterText.trim() || 'Thank you for your visit!').split('\n').map((line, i) => (
+                      <div key={i}>{line || '\u00A0'}</div>
+                    ))}
+                    {receiptShowQrCode ? (
+                      <div className="mt-3 flex justify-center">
+                        <div className="w-16 h-16 border border-gray-300 rounded flex items-center justify-center text-gray-400 text-[10px]">
+                          QR Code
+                        </div>
+                      </div>
+                    ) : null}
+                    <div className="mt-4 pt-3 text-[10px] text-gray-500">
+                      Solution by : www.ezymenu.com.au
+                    </div>
+                  </div>
+                </div>
+              </div>
+            </div>
+          </div>
+        ) : activeTab === 'services' ? (
           <div>
             <h2 className="text-lg font-semibold text-gray-900 mb-2">Service types</h2>
             <p className="text-sm text-gray-600 mb-4">Select the types of service your restaurant offers. These will appear on your listing so customers know what to expect.</p>

@@ -1,6 +1,7 @@
 'use client'
 
-import { useState } from 'react'
+import { useState, useEffect } from 'react'
+import { useSearchParams } from 'next/navigation'
 import { Clock, CheckCircle, ChefHat, Package, Search, User } from 'lucide-react'
 import { Card } from '../ui/Card'
 import { Badge } from '../ui/Badge'
@@ -19,36 +20,65 @@ const statusSteps: { status: OrderStatus; label: string; icon: React.ReactNode }
 ]
 
 export function OrderTracking() {
+  const searchParams = useSearchParams()
   const [orders, setOrders] = useState<Order[]>([])
   const [customerName, setCustomerName] = useState<string>('')
   const [phone, setPhone] = useState('')
   const [email, setEmail] = useState('')
+  const [receiptNo, setReceiptNo] = useState('')
   const [loading, setLoading] = useState(false)
   const [searched, setSearched] = useState(false)
 
+  const fetchOrdersByParams = async (params: URLSearchParams) => {
+    const res = await fetch(`/api/orders?${params.toString()}`)
+    if (!res.ok) return []
+    const data = await res.json()
+    const list = (data.orders ?? []) as SupabaseOrderRow[]
+    const seen = new Set<string>()
+    const deduped = list.filter((o) => {
+      if (seen.has(o.id)) return false
+      seen.add(o.id)
+      return true
+    })
+    return normalizeOrders(deduped)
+  }
+
+  useEffect(() => {
+    const orderId = searchParams.get('orderId')
+    if (!orderId?.trim()) return
+    setLoading(true)
+    setSearched(true)
+    const params = new URLSearchParams()
+    params.set('orderId', orderId.trim())
+    fetchOrdersByParams(params)
+      .then((normalized) => {
+        setOrders(normalized)
+        if (normalized.length > 0 && normalized[0].customerName) {
+          setCustomerName(normalized[0].customerName)
+        }
+      })
+      .catch(() => setOrders([]))
+      .finally(() => setLoading(false))
+  }, [searchParams])
+
   const handleLookup = async (e: React.FormEvent) => {
     e.preventDefault()
+    const receiptTrim = receiptNo.trim()
     const phoneTrim = phone.trim()
-    if (!phoneTrim) return
+    if (!receiptTrim && !phoneTrim) return
     setLoading(true)
     setSearched(true)
     setOrders([])
     setCustomerName('')
     try {
       const params = new URLSearchParams()
-      params.set('customerPhone', phoneTrim)
-      if (email.trim()) params.set('customerEmail', email.trim().toLowerCase())
-      const res = await fetch(`/api/orders?${params.toString()}`)
-      if (!res.ok) return
-      const data = await res.json()
-      const list = (data.orders ?? []) as SupabaseOrderRow[]
-      const seen = new Set<string>()
-      const deduped = list.filter((o) => {
-        if (seen.has(o.id)) return false
-        seen.add(o.id)
-        return true
-      })
-      const normalized = normalizeOrders(deduped)
+      if (receiptTrim) {
+        params.set('receiptNo', receiptTrim)
+      } else {
+        params.set('customerPhone', phoneTrim)
+        if (email.trim()) params.set('customerEmail', email.trim().toLowerCase())
+      }
+      const normalized = await fetchOrdersByParams(params)
       setOrders(normalized)
       if (normalized.length > 0 && normalized[0].customerName) {
         setCustomerName(normalized[0].customerName)
@@ -76,10 +106,10 @@ export function OrderTracking() {
       <div className="max-w-4xl mx-auto">
         <h1 className="text-3xl font-bold text-gray-900 mb-2">Track Your Order</h1>
         <p className="text-gray-600 mb-8">
-          Enter the phone number you used when placing your order to see only your orders.
+          Enter your Receipt No (e.g. 001-0001) or phone number to see your order summary and history.
         </p>
 
-        {/* Lookup form – required to see orders */}
+        {/* Lookup form – by Receipt No or phone */}
         <Card className="p-6 mb-8">
           <h2 className="text-lg font-semibold text-gray-900 mb-4 flex items-center gap-2">
             <Search className="w-5 h-5 text-orange-600" />
@@ -87,12 +117,19 @@ export function OrderTracking() {
           </h2>
           <form onSubmit={handleLookup} className="space-y-4">
             <Input
+              label="Receipt No (optional)"
+              type="text"
+              value={receiptNo}
+              onChange={(e) => setReceiptNo(e.target.value)}
+              placeholder="e.g. 001-0001 (from your receipt)"
+              autoComplete="off"
+            />
+            <Input
               label="Phone number"
               type="tel"
               value={phone}
               onChange={(e) => setPhone(e.target.value)}
               placeholder="e.g. 0412 345 678"
-              required
               autoComplete="tel"
             />
             <Input
@@ -103,7 +140,10 @@ export function OrderTracking() {
               placeholder="your@email.com"
               autoComplete="email"
             />
-            <Button type="submit" disabled={loading} className="w-full sm:w-auto">
+            <p className="text-xs text-gray-500">
+              Enter Receipt No from your ticket to view that order, or enter your phone number to see orders placed with that number.
+            </p>
+            <Button type="submit" disabled={loading || (!receiptNo.trim() && !phone.trim())} className="w-full sm:w-auto">
               {loading ? 'Searching…' : 'Find my orders'}
             </Button>
           </form>
@@ -118,7 +158,9 @@ export function OrderTracking() {
           <Card className="p-12 text-center">
             <p className="text-gray-600 font-medium">No orders found</p>
             <p className="text-sm text-gray-500 mt-1">
-              Check the phone number (and email if you used one). Orders are listed under the details you gave at checkout.
+              {receiptNo.trim()
+                ? 'Check the Receipt No (e.g. 001-0001) from your ticket.'
+                : 'Check the phone number (and email if you used one). Orders are listed under the details you gave at checkout.'}
             </p>
           </Card>
         ) : orders.length > 0 ? (
@@ -137,7 +179,12 @@ export function OrderTracking() {
                   <Card key={order.id} className="p-6">
                     <div className="flex justify-between items-start mb-6">
                       <div>
-                        <h3 className="text-lg font-bold text-gray-900">Order #{order.id.slice(-8)}</h3>
+                        <h3 className="text-lg font-bold text-gray-900">
+                          Order #{order.receiptNo || order.id.slice(-8)}
+                        </h3>
+                        {order.receiptNo && (
+                          <p className="text-xs text-gray-600 mt-0.5">Receipt No: {order.receiptNo}</p>
+                        )}
                         <p className="text-sm text-gray-500 mt-1">
                           Placed at {formatTime(order.createdAt)}
                         </p>

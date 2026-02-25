@@ -27,6 +27,13 @@ type RestaurantRow = {
   online_card_surcharge_percent?: number | null
   pos_card_surcharge_percent?: number | null
   service_types?: unknown
+  receipt_business_name?: string | null
+  receipt_abn?: string | null
+  receipt_show_qr_code?: boolean | null
+  receipt_footer_text?: string | null
+  receipt_number_prefix?: string | null
+  receipt_address?: string | null
+  receipt_phone?: string | null
 }
 
 function toRestaurant(row: RestaurantRow) {
@@ -59,6 +66,13 @@ function toRestaurant(row: RestaurantRow) {
     onlineCardSurchargePercent: row.online_card_surcharge_percent != null ? Number(row.online_card_surcharge_percent) : 0,
     posCardSurchargePercent: row.pos_card_surcharge_percent != null ? Number(row.pos_card_surcharge_percent) : 0,
     serviceTypes: parseServiceTypes(row.service_types),
+    receiptBusinessName: row.receipt_business_name ?? row.name ?? '',
+    receiptAbn: row.receipt_abn ?? '',
+    receiptShowQrCode: row.receipt_show_qr_code !== false,
+    receiptFooterText: row.receipt_footer_text ?? '',
+    receiptNumberPrefix: (row.receipt_number_prefix ?? '001').toString().trim() || '001',
+    receiptAddress: row.receipt_address ?? row.address ?? '',
+    receiptPhone: row.receipt_phone ?? row.phone ?? '',
   }
 }
 
@@ -133,6 +147,13 @@ export async function PATCH(
       const allowed = ['dine-in', 'delivery', 'takeaway']
       updates.service_types = body.serviceTypes.filter((s: string) => allowed.includes(s))
     }
+    if (typeof body.receiptBusinessName === 'string') updates.receipt_business_name = body.receiptBusinessName.trim() || null
+    if (typeof body.receiptAbn === 'string') updates.receipt_abn = body.receiptAbn.trim() || null
+    if (typeof body.receiptShowQrCode === 'boolean') updates.receipt_show_qr_code = body.receiptShowQrCode
+    if (typeof body.receiptFooterText === 'string') updates.receipt_footer_text = body.receiptFooterText.trim() || null
+    if (typeof body.receiptNumberPrefix === 'string') updates.receipt_number_prefix = body.receiptNumberPrefix.trim() || null
+    if (typeof body.receiptAddress === 'string') updates.receipt_address = body.receiptAddress.trim() || null
+    if (typeof body.receiptPhone === 'string') updates.receipt_phone = body.receiptPhone.trim() || null
 
     if (Object.keys(updates).length === 0) {
       return NextResponse.json({ error: 'No valid fields to update' }, { status: 400 })

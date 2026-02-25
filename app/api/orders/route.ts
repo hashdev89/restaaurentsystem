@@ -25,7 +25,7 @@ function normalizePhone(phone: string): string {
 export async function POST(request: NextRequest) {
   try {
     const body = await request.json()
-    const { restaurantId, customerName, customerEmail, customerPhone, items, total, orderType, tableNumber, specialRequests, paymentStatus, squarePaymentId } = body
+    const { restaurantId, customerName, customerEmail, customerPhone, items, total, orderType, tableNumber, specialRequests, paymentStatus, squarePaymentId, receiptNo } = body
 
     if (!customerName?.trim() || !customerEmail?.trim() || !customerPhone?.trim()) {
       return NextResponse.json(
@@ -85,7 +85,8 @@ export async function POST(request: NextRequest) {
         table_number: tableNumber || null,
         special_requests: specialRequests || null,
         payment_status: paymentStatus || 'pending',
-        square_payment_id: squarePaymentId || null
+        square_payment_id: squarePaymentId || null,
+        ...(typeof receiptNo === 'string' && receiptNo.trim() ? { receipt_no: receiptNo.trim() } : {})
       })
       .select()
       .single()
@@ -169,6 +170,8 @@ export async function GET(request: NextRequest) {
     const status = searchParams.get('status')
     const customerPhoneParam = searchParams.get('customerPhone')
     const customerEmailParam = searchParams.get('customerEmail')
+    const orderIdParam = searchParams.get('orderId')
+    const receiptNoParam = searchParams.get('receiptNo')
 
     const restaurantId = restaurantIdParam ? resolveRestaurantId(restaurantIdParam) : undefined
 
@@ -186,6 +189,13 @@ export async function GET(request: NextRequest) {
 
     if (status) {
       query = query.eq('status', status)
+    }
+
+    if (orderIdParam?.trim()) {
+      query = query.eq('id', orderIdParam.trim())
+    }
+    if (receiptNoParam?.trim()) {
+      query = query.eq('receipt_no', receiptNoParam.trim())
     }
 
     const { data, error } = await query

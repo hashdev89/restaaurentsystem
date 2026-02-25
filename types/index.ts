@@ -179,5 +179,7 @@ export interface Order {
   paymentStatus: PaymentStatus;
   squarePaymentId?: string;
   estimatedReadyTime?: string;
+  /** Receipt number shown on printed receipt (e.g. 001-0001). Used for lookup on Track your order. */
+  receiptNo?: string;
 }
 

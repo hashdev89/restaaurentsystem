@@ -165,6 +165,17 @@ interface POSTransaction {
   items: number
 }
 
+/** Receipt/bill customization from Restaurant Dashboard */
+interface PosReceiptState {
+  businessName: string
+  abn: string
+  address: string
+  phone: string
+  numberPrefix: string
+  showQrCode: boolean
+  footerText: string
+}
+
 // Australian Restaurant Menu Data with Images
 const POS_CATEGORIES: POSCategory[] = [
   {
@@ -747,7 +758,7 @@ export function POSSystem({ restaurantId: restaurantIdProp }: { restaurantId?: s
   const [orderType, setOrderType] = useState<OrderType>('dine-in')
   const [tableNumber, setTableNumber] = useState('')
   const [customerName, setCustomerName] = useState('')
-  const [orderNotes, setOrderNotes] = useState('')
+  const [cashierName, setCashierName] = useState('')
   const [isProcessing, setIsProcessing] = useState(false)
   const [showCustomizationModal, setShowCustomizationModal] = useState(false)
   const [showPaymentModal, setShowPaymentModal] = useState(false)
@@ -766,6 +777,8 @@ export function POSSystem({ restaurantId: restaurantIdProp }: { restaurantId?: s
   const [tip, setTip] = useState(0)
   const [tipPercentage, setTipPercentage] = useState<number | null>(null)
   const [orderNumber, setOrderNumber] = useState(1)
+  /** Receipt number sequence: 1, 2, 3… so receipt no is 001, 002, 003, etc. */
+  const [receiptSequence, setReceiptSequence] = useState(1)
   const searchInputRef = useRef<HTMLInputElement>(null)
   const [activeSection, setActiveSection] = useState<'menu' | 'orders' | 'more'>('menu')
   const [moreSubSection, setMoreSubSection] = useState<'main' | 'transactions' | 'items' | 'reports' | 'printTest' | 'dailySummary' | 'settings' | 'support'>('main')
@@ -829,6 +842,22 @@ export function POSSystem({ restaurantId: restaurantIdProp }: { restaurantId?: s
     posCardSurchargePercent: 0,
   })
 
+  // Receipt/bill customization from Restaurant Dashboard
+  const [posReceipt, setPosReceipt] = useState<PosReceiptState>({
+    businessName: '',
+    abn: '',
+    address: '',
+    phone: '',
+    numberPrefix: '001',
+    showQrCode: true,
+    footerText: '',
+  })
+
+  /** Format receipt number as 001, 002, 003, … (3-digit sequence; first order = 001). */
+  const formatReceiptNo = useCallback((sequence: number) => {
+    return String(sequence).padStart(3, '0')
+  }, [])
+
   // When linked to a restaurant (e.g. /restaurant/[id]/pos), use that restaurant and load menu from API
   const [, setMenuSyncLoading] = useState(false)
   const fetchMenuFromApi = useCallback(async (rid: string) => {
@@ -867,6 +896,15 @@ export function POSSystem({ restaurantId: restaurantIdProp }: { restaurantId?: s
               publicHolidayDates: Array.isArray(r.publicHolidayDates) ? r.publicHolidayDates : [],
               surchargeManualOverride: r.surchargeManualOverride === 'sunday' || r.surchargeManualOverride === 'public_holiday' || r.surchargeManualOverride === 'none' ? r.surchargeManualOverride : 'auto',
               posCardSurchargePercent: Number(r.posCardSurchargePercent) ?? 0,
+            })
+            setPosReceipt({
+              businessName: r.receiptBusinessName ?? r.name ?? 'ABC Retail Pty Ltd',
+              abn: r.receiptAbn ?? '',
+              address: r.receiptAddress ?? r.address ?? '',
+              phone: r.receiptPhone ?? r.phone ?? '',
+              numberPrefix: (r.receiptNumberPrefix ?? '001').toString().trim() || '001',
+              showQrCode: r.receiptShowQrCode !== false,
+              footerText: r.receiptFooterText ?? '',
             })
           }
         })
@@ -907,6 +945,15 @@ export function POSSystem({ restaurantId: restaurantIdProp }: { restaurantId?: s
             publicHolidayDates: Array.isArray(r.publicHolidayDates) ? r.publicHolidayDates : [],
             surchargeManualOverride: r.surchargeManualOverride === 'sunday' || r.surchargeManualOverride === 'public_holiday' || r.surchargeManualOverride === 'none' ? r.surchargeManualOverride : 'auto',
             posCardSurchargePercent: Number(r.posCardSurchargePercent) ?? 0,
+          })
+          setPosReceipt({
+            businessName: r.receiptBusinessName ?? r.name ?? 'ABC Retail Pty Ltd',
+            abn: r.receiptAbn ?? '',
+            address: r.receiptAddress ?? r.address ?? '',
+            phone: r.receiptPhone ?? r.phone ?? '',
+            numberPrefix: (r.receiptNumberPrefix ?? '001').toString().trim() || '001',
+            showQrCode: r.receiptShowQrCode !== false,
+            footerText: r.receiptFooterText ?? '',
           })
         }
       })
@@ -1221,7 +1268,7 @@ export function POSSystem({ restaurantId: restaurantIdProp }: { restaurantId?: s
       setOrderType((order.orderType as OrderType) || 'dine-in')
       setTableNumber(order.tableNumber ?? '')
       setCustomerName(order.customerName ?? '')
-      setOrderNotes('')
+      setCashierName('')
       setDiscount(null)
       setTip(0)
       setTipPercentage(null)
@@ -1341,7 +1388,7 @@ export function POSSystem({ restaurantId: restaurantIdProp }: { restaurantId?: s
     setCart([])
     setTableNumber('')
     setCustomerName('')
-    setOrderNotes('')
+    setCashierName('')
     setDiscount(null)
     setTip(0)
     setTipPercentage(null)
@@ -1349,17 +1396,33 @@ export function POSSystem({ restaurantId: restaurantIdProp }: { restaurantId?: s
     setShowClearConfirm(false)
   }
 
-  // Print receipt function for standard POS thermal printers
-  const printReceipt = useCallback(() => {
+  // Print receipt function for standard POS thermal printers. Pass orderId when available so QR code can link to order. Pass receiptNoOverride when you've already assigned a receipt number for this order.
+  const printReceipt = useCallback((receiptOrderId?: string | null, receiptNoOverride?: string | null) => {
     const receiptWindow = window.open('', '_blank', 'width=400,height=600')
     if (!receiptWindow) return
+
+    const orderIdForQr = receiptOrderId ?? orderIdForBilling
+    const receiptBusinessName = (posReceipt.businessName || '').trim() || 'Receipt'
+    const receiptAbn = (posReceipt.abn || '').trim()
+    const receiptAddress = (posReceipt.address || '').trim()
+    const receiptPhone = (posReceipt.phone || '').trim()
+    const receiptNo = (receiptNoOverride != null && receiptNoOverride !== '')
+      ? receiptNoOverride
+      : formatReceiptNo(receiptSequence)
+    const receiptFooter = (posReceipt.footerText || '').trim() || 'Thank you for your visit!'
+    const showQr = posReceipt.showQrCode && orderIdForQr
+    const origin = typeof window !== 'undefined' ? window.location.origin : ''
+    const orderUrl = orderIdForQr ? `${origin}/orders?orderId=${encodeURIComponent(orderIdForQr)}` : ''
+    const qrImageSrc = showQr && orderUrl
+      ? `https://api.qrserver.com/v1/create-qr-code/?size=120x120&data=${encodeURIComponent(orderUrl)}`
+      : ''
 
     const receiptHTML = `
 <!DOCTYPE html>
 <html>
 <head>
   <meta charset="UTF-8">
-  <title>Receipt - Order #${orderNumber}</title>
+  <title>Receipt - ${receiptNo}</title>
   <style>
     @media print {
       @page {
@@ -1389,9 +1452,8 @@ export function POSSystem({ restaurantId: restaurantIdProp }: { restaurantId?: s
     }
     .header {
       text-align: center;
-      border-bottom: 1px dashed #000;
-      padding-bottom: 10px;
-      margin-bottom: 10px;
+      padding-bottom: 12px;
+      margin-bottom: 12px;
     }
     .business-name {
       font-size: 18px;
@@ -1404,9 +1466,8 @@ export function POSSystem({ restaurantId: restaurantIdProp }: { restaurantId?: s
       margin: 3px 0;
     }
     .order-info {
-      margin: 10px 0;
-      padding: 5px 0;
-      border-bottom: 1px dashed #000;
+      margin: 12px 0;
+      padding: 8px 0;
     }
     .order-info-row {
       display: flex;
@@ -1419,8 +1480,7 @@ export function POSSystem({ restaurantId: restaurantIdProp }: { restaurantId?: s
     }
     .item-row {
       margin: 8px 0;
-      padding-bottom: 5px;
-      border-bottom: 1px dotted #ccc;
+      padding-bottom: 8px;
     }
     .item-name {
       font-weight: bold;
@@ -1454,15 +1514,12 @@ export function POSSystem({ restaurantId: restaurantIdProp }: { restaurantId?: s
     .total-row.final {
       font-size: 14px;
       font-weight: bold;
-      padding-top: 5px;
-      border-top: 1px dashed #000;
-      margin-top: 10px;
+      padding-top: 8px;
+      margin-top: 12px;
     }
     .payment-info {
       margin: 15px 0;
-      padding: 10px 0;
-      border-top: 1px dashed #000;
-      border-bottom: 1px dashed #000;
+      padding: 12px 0;
     }
     .payment-row {
       display: flex;
@@ -1473,14 +1530,12 @@ export function POSSystem({ restaurantId: restaurantIdProp }: { restaurantId?: s
     .footer {
       text-align: center;
       margin-top: 20px;
-      padding-top: 10px;
-      border-top: 1px dashed #000;
+      padding-top: 12px;
       font-size: 10px;
     }
     .divider {
-      text-align: center;
-      margin: 10px 0;
-      font-size: 14px;
+      margin: 12px 0;
+      height: 0;
     }
     .notes {
       margin: 10px 0;
@@ -1493,18 +1548,19 @@ export function POSSystem({ restaurantId: restaurantIdProp }: { restaurantId?: s
 </head>
 <body>
   <div class="receipt">
-    <div class="divider">------------------------------------------</div>
+    <div class="divider"></div>
     <div class="header" style="text-align: center;">
-      <div class="business-name">Receipt</div>
+      <div class="business-name">${(receiptBusinessName || 'Receipt').replace(/</g, '&lt;').replace(/>/g, '&gt;')}</div>
+      ${receiptAddress ? `<div class="business-info">${receiptAddress.replace(/</g, '&lt;').replace(/>/g, '&gt;')}</div>` : ''}
+      ${receiptPhone ? `<div class="business-info">Ph: ${receiptPhone.replace(/</g, '&lt;').replace(/>/g, '&gt;')}</div>` : ''}
+      ${receiptAbn ? `<div class="business-info">ABN: ${receiptAbn.replace(/</g, '&lt;').replace(/>/g, '&gt;')}</div>` : ''}
     </div>
-    <div class="divider">------------------------------------------</div>
+    <div class="divider"></div>
     <div class="business-info" style="text-align: center;">
-      <div class="business-info">ABC Retail Pty Ltd</div>
-      <div class="business-info">ABN: 12 345 678 901</div>
       <div class="order-info-row"><span>Date:</span><span>${new Date().toLocaleString('en-AU', { dateStyle: 'short', timeStyle: 'short' })}</span></div>
-      <div class="order-info-row"><span>Receipt No:</span><span>POS-${orderNumber}</span></div>
+      <div class="order-info-row"><span>Receipt No:</span><span>${receiptNo}</span></div>
     </div>
-    <div class="divider">------------------------------------------</div>
+    <div class="divider"></div>
 
     <table class="item-table" style="width:100%; font-size: 11px; border-collapse: collapse;">
       <thead>
@@ -1547,7 +1603,7 @@ export function POSSystem({ restaurantId: restaurantIdProp }: { restaurantId?: s
       </tbody>
     </table>
 
-    <div class="divider">------------------------------------------</div>
+    <div class="divider"></div>
     <div class="totals">
       <div class="total-row gst">
         <span>GST included (10%)</span>
@@ -1623,23 +1679,31 @@ export function POSSystem({ restaurantId: restaurantIdProp }: { restaurantId?: s
       </div>
     </div>
 
-    ${orderNotes ? `
+    ${cashierName ? `
     <div class="notes">
-      <strong>Notes:</strong><br>
-      ${orderNotes}
+      <strong>Cashier:</strong> ${(cashierName || '').replace(/</g, '&lt;').replace(/>/g, '&gt;')}
     </div>
     ` : ''}
 
     <div class="footer">
-      <div>Thank you for your visit!</div>
-      <div style="margin-top: 5px;">GST included in prices</div>
+      ${receiptFooter.split('\n').map(line => `<div>${(line || '').replace(/</g, '&lt;').replace(/>/g, '&gt;')}</div>`).join('')}
+      ${!receiptFooter.includes('GST') ? '<div style="margin-top: 5px;">GST included in prices</div>' : ''}
       <div style="margin-top: 10px; font-size: 9px;">
         This is a computer-generated receipt.<br>
         No signature required.
       </div>
+      ${showQr && qrImageSrc ? `
+      <div style="margin-top: 12px;">
+        <p style="font-size: 10px; margin-bottom: 4px;">Scan to view order status</p>
+        <img src="${qrImageSrc}" alt="Order QR" width="120" height="120" style="display: block; margin: 0 auto;" />
+      </div>
+      ` : ''}
+      <div style="margin-top: 12px; padding-top: 8px; border-top: 1px dashed #ccc; font-size: 9px; color: #666; text-align: center;">
+        Solution by : www.ezymenu.com.au
+      </div>
     </div>
 
-    <div class="divider">------------------------------------------</div>
+    <div class="divider"></div>
   </div>
 </body>
 </html>
@@ -1656,7 +1720,7 @@ export function POSSystem({ restaurantId: restaurantIdProp }: { restaurantId?: s
       // receiptWindow.close()
     }, 250)
     // eslint-disable-next-line react-hooks/exhaustive-deps -- receipt template uses all listed deps
-  }, [cart, orderNumber, orderType, tableNumber, customerName, subtotalExGst, totalGst, subtotalInclGst, discount, discountAmount, tip, tipPercentage, total, totalBeforeCardSurcharge, paymentMethod, orderNotes, cashTendered, mixCardAmount, mixCashAmount, surchargeAmount, surchargeApplied, posCardSurchargeAmount])
+  }, [cart, orderNumber, orderType, tableNumber, customerName, subtotalExGst, totalGst, subtotalInclGst, discount, discountAmount, tip, tipPercentage, total, totalBeforeCardSurcharge, paymentMethod, cashierName, cashTendered, mixCardAmount, mixCashAmount, surchargeAmount, surchargeApplied, posCardSurchargeAmount, orderIdForBilling, posReceipt, receiptSequence, formatReceiptNo])
 
   const handleStartCardPayment = async () => {
     if (cart.length === 0 || !posStripePromise) return
@@ -1722,7 +1786,9 @@ export function POSSystem({ restaurantId: restaurantIdProp }: { restaurantId?: s
 
   const handleCardPaymentSuccess = useCallback(() => {
     if (!stripeOrderId || !stripeOrderNumber) return
-    printReceipt()
+    const receiptNoCard = formatReceiptNo(receiptSequence)
+    setReceiptSequence((prev) => prev + 1)
+    setTimeout(() => printReceipt(stripeOrderId, receiptNoCard), 500)
     setOrders(prev => [{
       id: stripeOrderId,
       orderNumber: stripeOrderNumber,
@@ -1750,12 +1816,11 @@ export function POSSystem({ restaurantId: restaurantIdProp }: { restaurantId?: s
       createdAt: new Date().toISOString(),
       items: cart.length
     }, ...prev])
-    setTimeout(() => printReceipt(), 500)
     success('Payment complete', `Order #${stripeOrderNumber} paid by card.`)
     setCart([])
     setTableNumber('')
     setCustomerName('')
-    setOrderNotes('')
+    setCashierName('')
     setDiscount(null)
     setTip(0)
     setTipPercentage(null)
@@ -1769,7 +1834,7 @@ export function POSSystem({ restaurantId: restaurantIdProp }: { restaurantId?: s
     setPaymentMethod('card')
     setMixCardAmount('')
     setMixCashAmount('')
-  }, [stripeOrderId, stripeOrderNumber, cart, total, subtotalExGst, totalGst, discount, tip, orderType, tableNumber, customerName, printReceipt, success])
+  }, [stripeOrderId, stripeOrderNumber, cart, total, subtotalExGst, totalGst, discount, tip, orderType, tableNumber, customerName, printReceipt, success, receiptSequence, formatReceiptNo])
 
   const handlePayment = async () => {
     if (cart.length === 0) return
@@ -1786,11 +1851,13 @@ export function POSSystem({ restaurantId: restaurantIdProp }: { restaurantId?: s
 
       // Billing an existing order (loaded via "Proceed to billing" from ready order): PATCH to completed, no new order
       if (orderIdForBilling) {
+        const receiptNoBilling = formatReceiptNo(receiptSequence)
+        setReceiptSequence((prev) => prev + 1)
         try {
           const res = await fetch(`/api/orders/${orderIdForBilling}`, {
             method: 'PATCH',
             headers: { 'Content-Type': 'application/json' },
-            body: JSON.stringify({ status: 'completed' })
+            body: JSON.stringify({ status: 'completed', receiptNo: receiptNoBilling })
           })
           if (!res.ok) throw new Error('Update failed')
           success('Billing complete', 'Order marked as completed.')
@@ -1799,7 +1866,7 @@ export function POSSystem({ restaurantId: restaurantIdProp }: { restaurantId?: s
         } catch (e) {
           warning('Could not complete order', e instanceof Error ? e.message : 'Failed to update order')
         }
-        setTimeout(() => printReceipt(), 500)
+        setTimeout(() => printReceipt(orderIdForBilling, receiptNoBilling), 500)
         const txnId = `txn-${Date.now()}`
         setTransactions(prev => [{
           id: txnId,
@@ -1814,7 +1881,7 @@ export function POSSystem({ restaurantId: restaurantIdProp }: { restaurantId?: s
         setCart([])
         setTableNumber('')
         setCustomerName('')
-        setOrderNotes('')
+        setCashierName('')
         setDiscount(null)
         setTip(0)
         setTipPercentage(null)
@@ -1830,6 +1897,8 @@ export function POSSystem({ restaurantId: restaurantIdProp }: { restaurantId?: s
 
       // New order from POS: create order in backend
       const orderId = `POS-${Date.now()}-${orderNumber}`
+      const receiptNoForPrint = formatReceiptNo(receiptSequence)
+      setReceiptSequence((prev) => prev + 1)
       try {
         const orderResponse = await fetch('/api/orders', {
           method: 'POST',
@@ -1851,7 +1920,8 @@ export function POSSystem({ restaurantId: restaurantIdProp }: { restaurantId?: s
             orderType,
             tableNumber: orderType === 'dine-in' ? tableNumber : null,
             paymentStatus,
-            squarePaymentId: paymentData.paymentId
+            squarePaymentId: paymentData.paymentId,
+            receiptNo: receiptNoForPrint
           })
         })
 
@@ -1859,20 +1929,21 @@ export function POSSystem({ restaurantId: restaurantIdProp }: { restaurantId?: s
           const errData = await orderResponse.json().catch(() => ({}))
           const errMsg = errData?.error || `Server returned ${orderResponse.status}`
           warning('Order saved locally', `Backend sync failed: ${errMsg}. Order stored offline.`)
+          setTimeout(() => printReceipt(undefined, receiptNoForPrint), 500)
         } else {
           const data = await orderResponse.json().catch(() => ({}))
           success('Payment complete', `Order #${orderNumber} saved`, {
             actionHref: data.orderId ? `/orders` : undefined,
             actionLabel: 'View orders',
           })
+          setTimeout(() => printReceipt(data?.orderId, receiptNoForPrint), 500)
         }
       } catch (orderError) {
         console.warn('Order API error, continuing with local storage:', orderError)
         const errMsg = orderError instanceof Error ? orderError.message : 'Network or server error'
         warning('Order saved locally', `Could not sync to server: ${errMsg}. Order stored offline.`)
+        setTimeout(() => printReceipt(undefined, receiptNoForPrint), 500)
       }
-
-      setTimeout(() => printReceipt(), 500)
 
       const newOrder = {
         id: orderId,
@@ -1911,7 +1982,7 @@ export function POSSystem({ restaurantId: restaurantIdProp }: { restaurantId?: s
       setCart([])
       setTableNumber('')
       setCustomerName('')
-      setOrderNotes('')
+      setCashierName('')
       setDiscount(null)
       setTip(0)
       setTipPercentage(null)
@@ -3506,11 +3577,11 @@ export function POSSystem({ restaurantId: restaurantIdProp }: { restaurantId?: s
                 </Button>
               </div>
               <div>
-                <label className="block text-sm font-medium text-gray-700 mb-1">Order notes</label>
+                <label className="block text-sm font-medium text-gray-700 mb-1">Cashier name</label>
                 <POSInput
-                  value={orderNotes}
-                  onChange={(e) => setOrderNotes(e.target.value)}
-                  placeholder="e.g. No onions, extra napkins"
+                  value={cashierName}
+                  onChange={(e) => setCashierName(e.target.value)}
+                  placeholder="e.g. Staff name"
                   className="text-sm"
                 />
               </div>
