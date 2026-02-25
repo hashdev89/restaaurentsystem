@@ -1278,6 +1278,140 @@ export function POSSystem({ restaurantId: restaurantIdProp }: { restaurantId?: s
     [pendingOrdersFromApi, success, warning, fetchPendingOrders]
   )
 
+  /** Build and print receipt HTML for an existing API order (online order bill copy). */
+  const printOrderReceipt = useCallback(
+    (order: Order, receiptNo: string) => {
+      const receiptWindow = window.open('', '_blank', 'width=400,height=600')
+      if (!receiptWindow) return
+      const receiptBusinessName = (posReceipt.businessName || '').trim() || 'Receipt'
+      const receiptAbn = (posReceipt.abn || '').trim()
+      const receiptAddress = (posReceipt.address || '').trim()
+      const receiptPhone = (posReceipt.phone || '').trim()
+      const receiptFooter = (posReceipt.footerText || '').trim() || 'Thank you for your visit!'
+      const showQr = posReceipt.showQrCode && order.id
+      const origin = typeof window !== 'undefined' ? window.location.origin : ''
+      const orderUrl = order.id ? `${origin}/orders?orderId=${encodeURIComponent(order.id)}` : ''
+      const qrImageSrc = showQr && orderUrl
+        ? `https://api.qrserver.com/v1/create-qr-code/?size=120x120&data=${encodeURIComponent(orderUrl)}`
+        : ''
+      const total = Number(order.total) || 0
+      const totalGst = total * (GST_RATE / (1 + GST_RATE))
+      const itemsHtml = (order.items || []).map((item) => {
+        const qty = Number(item.quantity) || 1
+        const pricePerUnit = Number(item.price) != null ? Number(item.price) : 0
+        const lineTotal = pricePerUnit * qty
+        const safeName = (item.name || '').replace(/</g, '&lt;').replace(/>/g, '&gt;')
+        const customizationsHtml = (item.customizations && item.customizations.length > 0)
+          ? item.customizations.map((g) => {
+              const opts = (g.options || []).map((o) => (o?.name || '').replace(/</g, '&lt;').replace(/>/g, '&gt;')).filter(Boolean)
+              const optsText = opts.join(', ')
+              if (!optsText) return ''
+              const isRemove = (g.type || g.name || '').toLowerCase().includes('remove')
+              if (isRemove) return `<div class="item-details">Remove: ${optsText}</div>`
+              return `<div class="item-details">Extras: ${optsText}</div>`
+            }).filter(Boolean).join('')
+          : ''
+        return `<tr>
+        <td style="text-align:left; vertical-align: top;">
+          <span class="item-name">${safeName}</span> (incl. GST)
+          ${customizationsHtml}
+        </td>
+        <td style="text-align:center; vertical-align: top;">${qty}</td>
+        <td style="text-align:right; vertical-align: top;">$${lineTotal.toFixed(2)}</td>
+      </tr>`
+      }).join('')
+      const receiptHTML = `
+<!DOCTYPE html>
+<html>
+<head>
+  <meta charset="UTF-8">
+  <title>Receipt - ${receiptNo}</title>
+  <style>
+    @media print { @page { size: 80mm auto; margin: 0; } body { margin: 0; padding: 10mm 5mm; font-family: 'Courier New', monospace; font-size: 12px; line-height: 1.4; width: 70mm; } }
+    body { font-family: 'Courier New', monospace; font-size: 12px; line-height: 1.4; width: 70mm; margin: 0 auto; padding: 10mm 5mm; background: white; }
+    .receipt { width: 100%; }
+    .header { text-align: center; padding-bottom: 12px; margin-bottom: 12px; }
+    .business-name { font-size: 18px; font-weight: bold; margin-bottom: 5px; text-transform: uppercase; }
+    .business-info { font-size: 10px; margin: 3px 0; }
+    .order-info-row { display: flex; justify-content: space-between; margin: 3px 0; font-size: 11px; }
+    .item-details { font-size: 10px; color: #666; margin-left: 10px; margin-top: 2px; }
+    .totals { margin: 15px 0; padding-top: 10px; border-top: 2px solid #000; }
+    .total-row { display: flex; justify-content: space-between; margin: 5px 0; font-size: 11px; }
+    .total-row.final { font-size: 14px; font-weight: bold; padding-top: 8px; margin-top: 12px; }
+    .payment-info { margin: 15px 0; padding: 12px 0; }
+    .payment-row { display: flex; justify-content: space-between; margin: 3px 0; font-size: 11px; }
+    .footer { text-align: center; margin-top: 20px; padding-top: 12px; font-size: 10px; }
+    .divider { margin: 12px 0; height: 0; }
+  </style>
+</head>
+<body>
+  <div class="receipt">
+    <div class="divider"></div>
+    <div class="header">
+      <div class="business-name">${receiptBusinessName.replace(/</g, '&lt;').replace(/>/g, '&gt;')}</div>
+      ${receiptAddress ? `<div class="business-info">${receiptAddress.replace(/</g, '&lt;').replace(/>/g, '&gt;')}</div>` : ''}
+      ${receiptPhone ? `<div class="business-info">Ph: ${receiptPhone.replace(/</g, '&lt;').replace(/>/g, '&gt;')}</div>` : ''}
+      ${receiptAbn ? `<div class="business-info">ABN: ${receiptAbn.replace(/</g, '&lt;').replace(/>/g, '&gt;')}</div>` : ''}
+    </div>
+    <div class="divider"></div>
+    <div class="business-info" style="text-align: center;">
+      <div class="order-info-row"><span>Date:</span><span>${new Date().toLocaleString('en-AU', { dateStyle: 'short', timeStyle: 'short' })}</span></div>
+      <div class="order-info-row"><span>Receipt No:</span><span>${receiptNo}</span></div>
+    </div>
+    <div class="divider"></div>
+    <table style="width:100%; font-size: 11px; border-collapse: collapse;">
+      <thead><tr><th style="text-align:left;">Item</th><th style="text-align:center;">Qty</th><th style="text-align:right;">Price</th></tr></thead>
+      <tbody>${itemsHtml}</tbody>
+    </table>
+    <div class="divider"></div>
+    <div class="totals">
+      <div class="total-row"><span>GST included (10%)</span><span>A$${totalGst.toFixed(2)}</span></div>
+      <div class="total-row final"><span>GRAND TOTAL</span><span>A$${total.toFixed(2)}</span></div>
+    </div>
+    <div class="payment-info">
+      <div class="payment-row"><span>Payment Method:</span><span><strong>ONLINE ORDER</strong></span></div>
+      <div class="payment-row"><span>Amount Paid:</span><span><strong>A$${total.toFixed(2)}</strong></span></div>
+      <div class="payment-row"><span>Status:</span><span><strong>PAID</strong></span></div>
+    </div>
+    <div class="footer">
+      ${receiptFooter.split('\n').map((line) => `<div>${(line || '').replace(/</g, '&lt;').replace(/>/g, '&gt;')}</div>`).join('')}
+      <div style="margin-top: 10px; font-size: 9px;">This is a computer-generated receipt. No signature required.</div>
+      ${showQr && qrImageSrc ? `<div style="margin-top: 12px;"><p style="font-size: 10px; margin-bottom: 4px;">Scan to view order status</p><img src="${qrImageSrc}" alt="Order QR" width="120" height="120" style="display: block; margin: 0 auto;" /></div>` : ''}
+      <div style="margin-top: 12px; padding-top: 8px; font-size: 9px; color: #666; text-align: center;">Solution by : www.ezymenu.com.au</div>
+    </div>
+    <div class="divider"></div>
+  </div>
+</body>
+</html>`
+      receiptWindow.document.write(receiptHTML)
+      receiptWindow.document.close()
+      setTimeout(() => { receiptWindow.focus(); receiptWindow.print() }, 250)
+    },
+    [posReceipt]
+  )
+
+  /** Print a bill copy for an online order (no payment step). Assigns receipt no, marks order completed, opens print. */
+  const handleProceedToPrint = useCallback(
+    async (order: Order) => {
+      const receiptNo = formatReceiptNo(receiptSequence)
+      setReceiptSequence((prev) => prev + 1)
+      try {
+        const res = await fetch(`/api/orders/${order.id}`, {
+          method: 'PATCH',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ status: 'completed', receiptNo })
+        })
+        if (!res.ok) throw new Error('Update failed')
+        fetchPendingOrders()
+        success('Receipt printed', 'Order marked completed. Bill copy printed.')
+      } catch (e) {
+        warning('Could not update order', e instanceof Error ? e.message : 'Failed to update order')
+      }
+      printOrderReceipt(order, receiptNo)
+    },
+    [receiptSequence, formatReceiptNo, fetchPendingOrders, success, warning, printOrderReceipt]
+  )
+
   const toggleCustomization = (groupId: string, optionId: string, maxSelections?: number) => {
     setSelectedCustomizations((prev) => {
       const current = prev[groupId] || []
@@ -2719,9 +2853,9 @@ export function POSSystem({ restaurantId: restaurantIdProp }: { restaurantId?: s
                                 variant="primary"
                                 size="sm"
                                 className="mt-2 w-full"
-                                onClick={() => handleProceedToBilling(order.id)}
+                                onClick={() => handleProceedToPrint(order)}
                               >
-                                Proceed to billing
+                                Proceed to print
                               </Button>
                             )}
                           </div>
