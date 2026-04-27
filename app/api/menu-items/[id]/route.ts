@@ -82,8 +82,31 @@ export async function DELETE(
     const id = params.id
     if (!id) return NextResponse.json({ error: 'id is required' }, { status: 400 })
     const { error } = await supabase.from('menu_items').delete().eq('id', id)
-    if (error) throw error
-    return NextResponse.json({ ok: true })
+    if (!error) return NextResponse.json({ ok: true, deleted: true })
+
+    // If historical order_items reference this menu item, hard delete is blocked by FK.
+    // Fall back to "archive" so it disappears from customer menu but history remains intact.
+    const isForeignKeyViolation =
+      (typeof error.code === 'string' && error.code === '23503') ||
+      (typeof error.message === 'string' && error.message.includes('violates foreign key constraint'))
+
+    if (isForeignKeyViolation) {
+      const { error: archiveError } = await supabase
+        .from('menu_items')
+        .update({ is_available: false })
+        .eq('id', id)
+
+      if (archiveError) throw archiveError
+
+      return NextResponse.json({
+        ok: true,
+        deleted: false,
+        archived: true,
+        message: 'Item is used in past orders, so it was archived instead of deleted.',
+      })
+    }
+
+    throw error
   } catch (err: unknown) {
     console.error('DELETE menu-items error:', err)
     const message = err && typeof err === 'object' && 'message' in err && typeof (err as { message: unknown }).message === 'string'

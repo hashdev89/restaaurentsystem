@@ -7,6 +7,7 @@ import { Input } from './ui/Input'
 import { Textarea } from './ui/Textarea'
 import { Select } from './ui/Select'
 import { Trash2 } from 'lucide-react'
+import { priceInclGst } from '@/lib/gst'
 
 const DEFAULT_CATEGORIES = ['Starters', 'Mains', 'Desserts', 'Drinks', 'Sides']
 
@@ -184,6 +185,7 @@ export function MenuItemForm({ initialData, categoryOptions, categoryCustomizati
           }
           required
         />
+        <p className="col-span-2 text-xs text-gray-500 -mt-2">Customer price incl. GST: A${priceInclGst(Number(formData.price) || 0).toFixed(2)}</p>
         <Select
           label="Category"
           value={formData.category ?? NO_CATEGORY_VALUE}
@@ -245,6 +247,9 @@ export function MenuItemForm({ initialData, categoryOptions, categoryCustomizati
               value={sizePrices.large}
               onChange={(e) => setSizePrices((p) => ({ ...p, large: parseFloat(e.target.value) || 0 }))}
             />
+            <p className="col-span-3 text-xs text-gray-500">
+              Customer prices incl. GST: Small A${priceInclGst(sizePrices.small).toFixed(2)} · Medium A${priceInclGst(sizePrices.medium).toFixed(2)} · Large A${priceInclGst(sizePrices.large).toFixed(2)}
+            </p>
           </div>
         )}
       </div>
@@ -327,6 +332,7 @@ export function MenuItemForm({ initialData, categoryOptions, categoryCustomizati
               className="w-20"
             />
             <span className="text-xs text-gray-500 w-6">A$</span>
+            <span className="text-xs text-gray-500 w-24">incl GST A${priceInclGst(Number(opt.price) || 0).toFixed(2)}</span>
             {allowDeleteOptions && (
               <button
                 type="button"

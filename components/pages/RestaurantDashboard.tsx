@@ -2,7 +2,7 @@
 
 import { useState, useEffect, useCallback, useMemo, useRef } from 'react'
 import Link from 'next/link'
-import { LayoutDashboard, History, LogOut, Utensils, Plus, Edit, Trash2, Hash, Package, Printer, User, Clock, Lock, Percent, Layers, Store } from 'lucide-react'
+import { LayoutDashboard, History, LogOut, Utensils, Plus, Edit, Trash2, Hash, Package, Printer, User, Clock, Lock, Percent, Layers, Store, EyeOff, Eye } from 'lucide-react'
 import { Order, MenuItem, MenuItemCustomizationOption } from '@/types'
 import { OrderCard } from '../OrderCard'
 import { Button } from '../ui/Button'
@@ -12,6 +12,7 @@ import { Input } from '../ui/Input'
 import { Select } from '../ui/Select'
 import { MenuItemForm, type CategoryCustomizationsMap } from '../MenuItemForm'
 import { normalizeOrders, type SupabaseOrderRow } from '@/lib/orders'
+import { priceInclGst } from '@/lib/gst'
 import { useNotification } from '../providers/NotificationProvider'
 
 const ORDERS_POLL_MS = 8000
@@ -87,6 +88,7 @@ export function RestaurantDashboard({ restaurantId: restaurantIdProp }: { restau
   const [tablesLoading, setTablesLoading] = useState(false)
   const [inventoryLoading, setInventoryLoading] = useState(false)
   const [menuItemsLoading, setMenuItemsLoading] = useState(false)
+  const [showUnavailableMenuItems, setShowUnavailableMenuItems] = useState(false)
   const [newTableNumber, setNewTableNumber] = useState('')
   const [newTableCapacity, setNewTableCapacity] = useState(4)
   const [newStockBarcode, setNewStockBarcode] = useState('')
@@ -118,6 +120,12 @@ export function RestaurantDashboard({ restaurantId: restaurantIdProp }: { restau
   const [receiptAddress, setReceiptAddress] = useState('')
   const [receiptPhone, setReceiptPhone] = useState('')
   const [receiptSaving, setReceiptSaving] = useState(false)
+
+  // Guard against stale dev/hot-reload state leaving a backdrop visible.
+  useEffect(() => {
+    setIsModalOpen(false)
+    setCategoryOptionsModalOpen(false)
+  }, [currentRestaurantId])
 
   // Fetch restaurant name for dashboard title
   useEffect(() => {
@@ -555,10 +563,37 @@ export function RestaurantDashboard({ restaurantId: restaurantIdProp }: { restau
         const data = await res.json().catch(() => ({}))
         throw new Error(data.error || 'Delete failed')
       }
+      const data = await res.json().catch(() => ({} as { archived?: boolean; deleted?: boolean; message?: string }))
+      if (data.archived) {
+        setMenuItems((prev) => prev.map((i) => (i.id === id ? { ...i, isAvailable: false } : i)))
+        info('Item archived', data.message || 'Item is used in past orders and cannot be hard deleted.')
+        return
+      }
       setMenuItems((prev) => prev.filter((i) => i.id !== id))
       success('Item deleted', 'Menu item removed.')
     } catch (e) {
       error('Could not delete', e instanceof Error ? e.message : 'Failed to delete menu item')
+    }
+  }
+
+  const handleSetMenuItemAvailability = async (itemId: string, isAvailable: boolean) => {
+    try {
+      const res = await fetch(`/api/menu-items/${itemId}`, {
+        method: 'PATCH',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ isAvailable }),
+      })
+      if (!res.ok) {
+        const data = await res.json().catch(() => ({}))
+        throw new Error(data.error || 'Could not update status')
+      }
+      setMenuItems((prev) => prev.map((i) => (i.id === itemId ? { ...i, isAvailable } : i)))
+      success(
+        isAvailable ? 'Item marked available' : 'Item marked unavailable',
+        isAvailable ? 'Item is now visible in POS and customer menu.' : 'Item is hidden from POS and customer menu.'
+      )
+    } catch (e) {
+      error('Could not update status', e instanceof Error ? e.message : 'Failed to update item status')
     }
   }
 
@@ -671,6 +706,7 @@ export function RestaurantDashboard({ restaurantId: restaurantIdProp }: { restau
   const historyOrders = orders
     .filter((o) => o.status !== 'pending' && o.status !== 'ready')
     .sort((a, b) => new Date(b.createdAt).getTime() - new Date(a.createdAt).getTime())
+  const visibleMenuItems = showUnavailableMenuItems ? menuItems : menuItems.filter((item) => item.isAvailable)
 
   if (!currentRestaurantId) {
     return (
@@ -742,11 +778,11 @@ export function RestaurantDashboard({ restaurantId: restaurantIdProp }: { restau
 
       {/* Main Content */}
       <main className="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8 py-8">
-        {/* Tabs */}
-        <div className="flex space-x-4 mb-8 overflow-x-auto pb-2">
+        {/* Tabs — stacked/wrapped layout, no horizontal scroll */}
+        <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-2 mb-8">
           <button
             onClick={() => setActiveTab('pending')}
-            className={`flex items-center px-4 py-2 rounded-md font-medium transition-colors whitespace-nowrap ${
+            className={`flex w-full items-center justify-center sm:justify-start px-4 py-2 rounded-md font-medium transition-colors whitespace-nowrap ${
               activeTab === 'pending'
                 ? 'bg-orange-600 text-white'
                 : 'bg-white text-gray-600 hover:bg-gray-50'
@@ -760,7 +796,7 @@ export function RestaurantDashboard({ restaurantId: restaurantIdProp }: { restau
           </button>
           <button
             onClick={() => setActiveTab('ready')}
-            className={`flex items-center px-4 py-2 rounded-md font-medium transition-colors whitespace-nowrap ${
+            className={`flex w-full items-center justify-center sm:justify-start px-4 py-2 rounded-md font-medium transition-colors whitespace-nowrap ${
               activeTab === 'ready'
                 ? 'bg-orange-600 text-white'
                 : 'bg-white text-gray-600 hover:bg-gray-50'
@@ -774,7 +810,7 @@ export function RestaurantDashboard({ restaurantId: restaurantIdProp }: { restau
           </button>
           <button
             onClick={() => setActiveTab('history')}
-            className={`flex items-center px-4 py-2 rounded-md font-medium transition-colors whitespace-nowrap ${
+            className={`flex w-full items-center justify-center sm:justify-start px-4 py-2 rounded-md font-medium transition-colors whitespace-nowrap ${
               activeTab === 'history'
                 ? 'bg-orange-600 text-white'
                 : 'bg-white text-gray-600 hover:bg-gray-50'
@@ -785,7 +821,7 @@ export function RestaurantDashboard({ restaurantId: restaurantIdProp }: { restau
           </button>
           <button
             onClick={() => setActiveTab('menu')}
-            className={`flex items-center px-4 py-2 rounded-md font-medium transition-colors whitespace-nowrap ${
+            className={`flex w-full items-center justify-center sm:justify-start px-4 py-2 rounded-md font-medium transition-colors whitespace-nowrap ${
               activeTab === 'menu'
                 ? 'bg-orange-600 text-white'
                 : 'bg-white text-gray-600 hover:bg-gray-50'
@@ -796,7 +832,7 @@ export function RestaurantDashboard({ restaurantId: restaurantIdProp }: { restau
           </button>
           <button
             onClick={() => setActiveTab('tables')}
-            className={`flex items-center px-4 py-2 rounded-md font-medium transition-colors whitespace-nowrap ${
+            className={`flex w-full items-center justify-center sm:justify-start px-4 py-2 rounded-md font-medium transition-colors whitespace-nowrap ${
               activeTab === 'tables'
                 ? 'bg-orange-600 text-white'
                 : 'bg-white text-gray-600 hover:bg-gray-50'
@@ -807,7 +843,7 @@ export function RestaurantDashboard({ restaurantId: restaurantIdProp }: { restau
           </button>
           <button
             onClick={() => setActiveTab('stock')}
-            className={`flex items-center px-4 py-2 rounded-md font-medium transition-colors whitespace-nowrap ${
+            className={`flex w-full items-center justify-center sm:justify-start px-4 py-2 rounded-md font-medium transition-colors whitespace-nowrap ${
               activeTab === 'stock'
                 ? 'bg-orange-600 text-white'
                 : 'bg-white text-gray-600 hover:bg-gray-50'
@@ -818,7 +854,7 @@ export function RestaurantDashboard({ restaurantId: restaurantIdProp }: { restau
           </button>
           <button
             onClick={() => setActiveTab('staff')}
-            className={`flex items-center px-4 py-2 rounded-md font-medium transition-colors whitespace-nowrap ${
+            className={`flex w-full items-center justify-center sm:justify-start px-4 py-2 rounded-md font-medium transition-colors whitespace-nowrap ${
               activeTab === 'staff'
                 ? 'bg-orange-600 text-white'
                 : 'bg-white text-gray-600 hover:bg-gray-50'
@@ -829,7 +865,7 @@ export function RestaurantDashboard({ restaurantId: restaurantIdProp }: { restau
           </button>
           <button
             onClick={() => setActiveTab('shift')}
-            className={`flex items-center px-4 py-2 rounded-md font-medium transition-colors whitespace-nowrap ${
+            className={`flex w-full items-center justify-center sm:justify-start px-4 py-2 rounded-md font-medium transition-colors whitespace-nowrap ${
               activeTab === 'shift'
                 ? 'bg-orange-600 text-white'
                 : 'bg-white text-gray-600 hover:bg-gray-50'
@@ -840,7 +876,7 @@ export function RestaurantDashboard({ restaurantId: restaurantIdProp }: { restau
           </button>
           <button
             onClick={() => setActiveTab('access')}
-            className={`flex items-center px-4 py-2 rounded-md font-medium transition-colors whitespace-nowrap ${
+            className={`flex w-full items-center justify-center sm:justify-start px-4 py-2 rounded-md font-medium transition-colors whitespace-nowrap ${
               activeTab === 'access'
                 ? 'bg-orange-600 text-white'
                 : 'bg-white text-gray-600 hover:bg-gray-50'
@@ -851,7 +887,7 @@ export function RestaurantDashboard({ restaurantId: restaurantIdProp }: { restau
           </button>
           <button
             onClick={() => setActiveTab('surcharges')}
-            className={`flex items-center px-4 py-2 rounded-md font-medium transition-colors whitespace-nowrap ${
+            className={`flex w-full items-center justify-center sm:justify-start px-4 py-2 rounded-md font-medium transition-colors whitespace-nowrap ${
               activeTab === 'surcharges'
                 ? 'bg-orange-600 text-white'
                 : 'bg-white text-gray-600 hover:bg-gray-50'
@@ -862,7 +898,7 @@ export function RestaurantDashboard({ restaurantId: restaurantIdProp }: { restau
           </button>
           <button
             onClick={() => setActiveTab('services')}
-            className={`flex items-center px-4 py-2 rounded-md font-medium transition-colors whitespace-nowrap ${
+            className={`flex w-full items-center justify-center sm:justify-start px-4 py-2 rounded-md font-medium transition-colors whitespace-nowrap ${
               activeTab === 'services'
                 ? 'bg-orange-600 text-white'
                 : 'bg-white text-gray-600 hover:bg-gray-50'
@@ -873,7 +909,7 @@ export function RestaurantDashboard({ restaurantId: restaurantIdProp }: { restau
           </button>
           <button
             onClick={() => setActiveTab('receipt')}
-            className={`flex items-center px-4 py-2 rounded-md font-medium transition-colors whitespace-nowrap ${
+            className={`flex w-full items-center justify-center sm:justify-start px-4 py-2 rounded-md font-medium transition-colors whitespace-nowrap ${
               activeTab === 'receipt'
                 ? 'bg-orange-600 text-white'
                 : 'bg-white text-gray-600 hover:bg-gray-50'
@@ -1455,7 +1491,7 @@ export function RestaurantDashboard({ restaurantId: restaurantIdProp }: { restau
                             className="w-20 rounded border border-gray-300 px-2 py-1 text-sm"
                           />
                         </td>
-                        <td className="px-4 py-3 text-sm">A${Number(i.price).toFixed(2)}</td>
+                        <td className="px-4 py-3 text-sm">A${priceInclGst(Number(i.price)).toFixed(2)}</td>
                         <td className="px-4 py-3 text-right">
                           <Button
                             type="button"
@@ -1491,6 +1527,14 @@ export function RestaurantDashboard({ restaurantId: restaurantIdProp }: { restau
                 >
                   <Layers className="w-4 h-4 mr-2" />
                   Category options
+                </Button>
+                <Button
+                  variant="secondary"
+                  onClick={() => setShowUnavailableMenuItems((v) => !v)}
+                  className="flex items-center gap-2"
+                >
+                  {showUnavailableMenuItems ? <EyeOff className="w-4 h-4" /> : <Eye className="w-4 h-4" />}
+                  {showUnavailableMenuItems ? 'Hide Unavailable' : 'Show Unavailable'}
                 </Button>
                 <Button onClick={handleAddMenuItem} className="bg-orange-600 hover:bg-orange-700">
                   <Plus className="w-4 h-4 mr-2" />
@@ -1531,8 +1575,8 @@ export function RestaurantDashboard({ restaurantId: restaurantIdProp }: { restau
                           Loading menu items…
                         </td>
                       </tr>
-                    ) : menuItems.length > 0 ? (
-                      menuItems.map((item) => (
+                    ) : visibleMenuItems.length > 0 ? (
+                      visibleMenuItems.map((item) => (
                         <tr key={item.id}>
                           <td className="px-6 py-4 whitespace-nowrap">
                             <div className="flex items-center">
@@ -1557,7 +1601,7 @@ export function RestaurantDashboard({ restaurantId: restaurantIdProp }: { restau
                             </span>
                           </td>
                           <td className="px-6 py-4 whitespace-nowrap text-sm text-gray-500">
-                            A${Number(item.price).toFixed(2)}
+                            A${priceInclGst(Number(item.price)).toFixed(2)}
                           </td>
                           <td className="px-6 py-4 text-sm text-gray-600 max-w-[200px]">
                             {item.customizations && item.customizations.length > 0 ? (
@@ -1568,7 +1612,7 @@ export function RestaurantDashboard({ restaurantId: restaurantIdProp }: { restau
                                   if ((g.type || '').toLowerCase() === 'remove') {
                                     return <div key={g.id}><span className="text-gray-500">Remove:</span> {opts}</div>
                                   }
-                                  const prices = (g.options || []).map((o) => Number(o?.price) > 0 ? `$${o.price}` : null).filter(Boolean)
+                                  const prices = (g.options || []).map((o) => Number(o?.price) > 0 ? `$${priceInclGst(Number(o.price)).toFixed(2)}` : null).filter(Boolean)
                                   const pricePart = prices.length > 0 ? ` (${prices.join(', ')})` : ''
                                   return <div key={g.id}><span className="text-gray-500">Extras:</span> {opts}{pricePart}</div>
                                 })}
@@ -1596,8 +1640,16 @@ export function RestaurantDashboard({ restaurantId: restaurantIdProp }: { restau
                               <Edit className="w-4 h-4" />
                             </button>
                             <button
+                              onClick={() => handleSetMenuItemAvailability(item.id, !item.isAvailable)}
+                              className={`${item.isAvailable ? 'text-amber-600 hover:text-amber-800' : 'text-green-600 hover:text-green-800'} mr-4`}
+                              title={item.isAvailable ? 'Mark unavailable' : 'Mark available'}
+                            >
+                              {item.isAvailable ? <EyeOff className="w-4 h-4" /> : <Eye className="w-4 h-4" />}
+                            </button>
+                            <button
                               onClick={() => handleDeleteMenuItem(item.id)}
                               className="text-red-600 hover:text-red-900"
+                              title="Delete item"
                             >
                               <Trash2 className="w-4 h-4" />
                             </button>
@@ -1607,7 +1659,9 @@ export function RestaurantDashboard({ restaurantId: restaurantIdProp }: { restau
                     ) : (
                       <tr>
                         <td colSpan={6} className="px-6 py-12 text-center text-gray-500">
-                          No menu items yet. Add your first item!
+                          {showUnavailableMenuItems
+                            ? 'No menu items yet. Add your first item!'
+                            : 'No available items. Show unavailable items or add a new one.'}
                         </td>
                       </tr>
                     )}

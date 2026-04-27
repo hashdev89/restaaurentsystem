@@ -13,7 +13,7 @@ import { Input } from '../ui/Input'
 import { Card } from '../ui/Card'
 import { Select } from '../ui/Select'
 import { OrderType } from '@/types'
-import { gstAmount, priceInclGst } from '@/lib/gst'
+import { gstFromInclusive, priceInclGst } from '@/lib/gst'
 
 const stripePublishableKey = process.env.NEXT_PUBLIC_STRIPE_PUBLISHABLE_KEY || ''
 const stripePromise = stripePublishableKey ? loadStripe(stripePublishableKey) : null
@@ -195,13 +195,14 @@ export function Checkout() {
     }))
   }
 
-  const gst = gstAmount(total)
   const serviceFeeAmount = 1.1 // A$1.00 + 10% GST = A$1.10 per order
-  const baseTotalBeforeCard = total + gst + serviceFeeAmount
+  const itemsTotalInclGst = priceInclGst(total)
+  const baseTotalBeforeCard = itemsTotalInclGst + serviceFeeAmount
   const cardSurchargeAmount = paymentMethod === 'pay-now' && onlineCardSurchargePercent > 0
     ? baseTotalBeforeCard * (onlineCardSurchargePercent / 100)
     : 0
   const finalTotal = baseTotalBeforeCard + cardSurchargeAmount
+  const gstIncludedInFinalTotal = gstFromInclusive(finalTotal)
 
   const buildDineInSeatingNote = (): string | null => {
     if (orderType !== 'dine-in') return null
@@ -577,7 +578,7 @@ export function Checkout() {
               <div className="space-y-2 mb-4 pt-2 border-t border-gray-200">
                 <div className="flex justify-between text-gray-600 text-sm">
                   <span>GST included (10%)</span>
-                  <span>A${gst.toFixed(2)}</span>
+                  <span>A${gstIncludedInFinalTotal.toFixed(2)}</span>
                 </div>
                 <div className="flex justify-between text-gray-600 text-sm">
                   <span>Service fee (incl. GST)</span>

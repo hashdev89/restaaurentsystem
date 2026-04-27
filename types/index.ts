@@ -165,6 +165,8 @@ export type TableNumber = string | null;
 export interface Order {
   id: string;
   restaurantId: string;
+  /** Set when order list is loaded from API (for Track your order, etc.) */
+  restaurantName?: string;
   customerName: string;
   customerEmail: string;
   customerPhone: string;

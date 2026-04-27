@@ -273,6 +273,27 @@ export async function GET(request: NextRequest) {
       orders = orders.filter((row) => String(row.customer_email ?? '').toLowerCase().trim() === matchEmail)
     }
 
+    // Attach restaurant display name for Track your order / receipts (one batch query)
+    const restaurantIds = [...new Set(
+      orders
+        .map((o) => (o as { restaurant_id?: string }).restaurant_id)
+        .filter((id): id is string => Boolean(id && isUuid(String(id))))
+    )]
+    if (restaurantIds.length > 0) {
+      const { data: restaurants } = await supabase
+        .from('restaurants')
+        .select('id, name')
+        .in('id', restaurantIds)
+      const nameById = new Map((restaurants ?? []).map((r: { id: string; name: string }) => [r.id, r.name]))
+      for (const order of orders) {
+        const rid = (order as { restaurant_id?: string }).restaurant_id
+        const nm = rid ? nameById.get(rid) : undefined
+        if (nm != null && String(nm).trim() !== '') {
+          ;(order as { restaurant_name?: string }).restaurant_name = String(nm).trim()
+        }
+      }
+    }
+
     return NextResponse.json({ orders })
   } catch (error: unknown) {
     console.error('Get orders error:', error)

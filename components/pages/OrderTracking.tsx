@@ -2,7 +2,7 @@
 
 import { useState, useEffect } from 'react'
 import { useSearchParams } from 'next/navigation'
-import { Clock, CheckCircle, ChefHat, Package, Search, User } from 'lucide-react'
+import { Clock, CheckCircle, ChefHat, Package, Search, Store, User } from 'lucide-react'
 import { Card } from '../ui/Card'
 import { Badge } from '../ui/Badge'
 import { Button } from '../ui/Button'
@@ -184,6 +184,15 @@ export function OrderTracking() {
                         </h3>
                         {order.receiptNo && (
                           <p className="text-xs text-gray-600 mt-0.5">Receipt No: {order.receiptNo}</p>
+                        )}
+                        {order.restaurantName && (
+                          <p className="text-sm text-gray-800 mt-2 flex items-center gap-1.5">
+                            <Store className="w-4 h-4 text-orange-600 shrink-0" aria-hidden />
+                            <span>
+                              <span className="text-gray-500">Restaurant:</span>{' '}
+                              <span className="font-medium text-gray-900">{order.restaurantName}</span>
+                            </span>
+                          </p>
                         )}
                         <p className="text-sm text-gray-500 mt-1">
                           Placed at {formatTime(order.createdAt)}

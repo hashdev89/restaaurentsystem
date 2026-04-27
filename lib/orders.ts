@@ -18,6 +18,8 @@ export interface SupabaseOrderRow {
   created_at: string
   updated_at: string
   receipt_no?: string | null
+  /** Joined / enriched by GET /api/orders for customer-facing views */
+  restaurant_name?: string | null
   order_items?: SupabaseOrderItemRow[]
 }
 
@@ -61,6 +63,9 @@ export function normalizeOrder(row: SupabaseOrderRow): Order {
   return {
     id: row.id,
     restaurantId: row.restaurant_id,
+    ...(row.restaurant_name != null && String(row.restaurant_name).trim() !== ''
+      ? { restaurantName: String(row.restaurant_name).trim() }
+      : {}),
     customerName: row.customer_name,
     customerEmail: row.customer_email,
     customerPhone: row.customer_phone,
