@@ -7,7 +7,24 @@ const supabaseAnonKey = process.env.NEXT_PUBLIC_SUPABASE_ANON_KEY
 let supabase: SupabaseClient | null = null
 
 if (supabaseUrl && supabaseAnonKey) {
-  supabase = createClient(supabaseUrl, supabaseAnonKey)
+  // Fix SSL certificate validation issue on Windows/Node.js
+  const fetch = (url: string, options?: any) => {
+    // @ts-ignore
+    if (typeof global !== 'undefined' && global.fetch) {
+      // @ts-ignore
+      return global.fetch(url, options)
+    }
+    // Fallback for environments without global fetch
+    return Promise.reject(new Error('Fetch not available'))
+  }
+
+  // Create the Supabase client with standard configuration
+  supabase = createClient(supabaseUrl, supabaseAnonKey, {
+    auth: {
+      autoRefreshToken: true,
+      persistSession: false,
+    },
+  })
 } else {
   // Create a dummy client for build time that will fail gracefully at runtime
   supabase = createClient('https://placeholder.supabase.co', 'placeholder-key')

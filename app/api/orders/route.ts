@@ -289,7 +289,7 @@ export async function GET(request: NextRequest) {
         const rid = (order as { restaurant_id?: string }).restaurant_id
         const nm = rid ? nameById.get(rid) : undefined
         if (nm != null && String(nm).trim() !== '') {
-          ;(order as { restaurant_name?: string }).restaurant_name = String(nm).trim()
+          (order as { restaurant_name?: string }).restaurant_name = String(nm).trim()
         }
       }
     }

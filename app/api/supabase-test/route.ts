@@ -23,8 +23,9 @@ export async function GET() {
       .limit(1)
 
     if (errRest) {
+      console.error('Supabase restaurants query error:', errRest)
       return NextResponse.json(
-        { ok: false, error: 'Supabase query failed', details: errRest.message },
+        { ok: false, error: 'Supabase query failed', details: errRest.message, fullError: JSON.stringify(errRest) },
         { status: 500 }
       )
     }
